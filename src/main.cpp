@@ -13,6 +13,8 @@
 #include "sensesp_cockpit_display.h"
 #include "sensesp_cockpit_display/hal/boards/waveshare_7b.h"
 #include "sensesp_n2k_gateway.h"
+#include "sensesp_ble_gateway/ble_signalk_gateway.h"
+#include "sensesp_ble_gateway/esp_hosted_bluedroid_ble.h"
 #include "sensesp_app_builder.h"
 #include "sensesp/signalk/signalk_ws_client.h"
 #include "sensesp/system/lambda_consumer.h"
@@ -22,6 +24,8 @@ using namespace sensesp_cockpit_display;
 
 static std::vector<std::unique_ptr<SKSwitchBinding>> sw_bindings;
 static std::vector<std::unique_ptr<SKGaugeBinding>> gauge_bindings;
+static std::shared_ptr<sensesp::EspHostedBluedroidBLE> g_ble;
+static std::shared_ptr<sensesp::BLESignalKGateway> g_ble_gw;
 
 static void add_switch(SwitchPage* page, const char* label,
                        const char* sk_path) {
@@ -119,8 +123,11 @@ void setup() {
         }
       }));
 
-  // BLE is disabled in this build
-  status->ble()->set_status(StatusLevel::kUnknown, "disabled");
+  // --- BLE gateway (Bluedroid via C6 over esp_hosted) ---
+  g_ble = std::make_shared<sensesp::EspHostedBluedroidBLE>();
+  g_ble_gw = std::make_shared<sensesp::BLESignalKGateway>(
+      g_ble, app->get_ws_client());
+  g_ble_gw->start();
 
   // --- N2K gateway ---
   auto* receiver =
@@ -160,6 +167,19 @@ void setup() {
       status->n2k()->set_status(StatusLevel::kWarning, "no frames yet");
     }
     last_rx = rx;
+
+    // BLE status
+    if (g_ble && g_ble->is_scanning()) {
+      char buf[48];
+      snprintf(buf, sizeof(buf), "scanning, %u hits / %u posted",
+               (unsigned)g_ble->scan_hit_count(),
+               (unsigned)(g_ble_gw ? g_ble_gw->advertisements_posted() : 0));
+      status->ble()->set_status(StatusLevel::kOk, buf);
+    } else if (g_ble) {
+      status->ble()->set_status(StatusLevel::kWarning, "not scanning");
+    } else {
+      status->ble()->set_status(StatusLevel::kError, "no controller");
+    }
 
     // Info line
     status->update_info(millis() / 1000, esp_get_free_heap_size(),
