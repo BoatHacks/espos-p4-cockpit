@@ -1,8 +1,8 @@
 /**
- * ESP32-P4 Cockpit — Phase 3: Switch page with grid layout.
+ * ESP32-P4 Cockpit — Phase 4: SignalK-bound switch panel.
  *
- * Native LVGL UI with a tabbed interface. First tab shows a grid of
- * toggle switches. Touch is handled locally — instant response.
+ * Switch widgets show live N2K switch states from SignalK and toggling
+ * them sends PUT requests back to control the actual switches.
  */
 
 #include <Arduino.h>
@@ -15,40 +15,57 @@
 using namespace sensesp;
 using namespace sensesp_cockpit_display;
 
+// Keep bindings alive for the lifetime of the app
+static std::vector<std::unique_ptr<SKSwitchBinding>> bindings;
+
+/// Helper: add a switch widget and bind it to a SignalK path.
+static void add_bound_switch(SwitchPage* page, const char* label,
+                             const char* sk_path) {
+  auto* widget = page->add_switch(label);
+  bindings.push_back(
+      std::make_unique<SKSwitchBinding>(String(sk_path), widget));
+}
+
 void setup() {
   SetupLogging(ESP_LOG_INFO);
 
-  ESP_LOGI("main", "=== Cockpit Phase 3: Switch Page ===");
+  ESP_LOGI("main", "=== Cockpit Phase 4: SignalK Switches ===");
 
-  // Initialize display + touch + LVGL + UI
+  // Display + touch + LVGL
   auto* display = new Waveshare7BDisplay();
   auto* touch = new Waveshare7BTouch();
   auto* ui = new CockpitUI(display, touch);
   ui->init();
 
-  // Add switches — using placeholder names for now.
-  // Phase 4 will bind these to real SignalK paths.
-  auto* sw_page = ui->get_switch_page();
-  sw_page->add_switch("Nav Lights");
-  sw_page->add_switch("Anchor Light");
-  sw_page->add_switch("Deck Light");
-  sw_page->add_switch("Cabin Light");
-  sw_page->add_switch("Bilge Pump");
-  sw_page->add_switch("Water Pump");
-  sw_page->add_switch("Fridge");
-  sw_page->add_switch("Charger");
-  sw_page->add_switch("Instruments");
-  sw_page->add_switch("Horn");
-  sw_page->add_switch("Windlass");
-  sw_page->add_switch("Autopilot");
-
-  // SensESP with WiFi
+  // SensESP — must be initialized before creating SK bindings
   SensESPAppBuilder builder;
   auto app = builder.set_hostname("p4-cockpit")
                  ->set_wifi_client("MOIN", "Moin2018!")
                  ->set_sk_server("192.168.0.148", 3000)
                  ->enable_ota("cockpit-ota")
                  ->get_app();
+
+  // Add switches bound to actual N2K switch bank paths.
+  // Format: "electrical.switches.bank.{bank_id}.{channel}.state"
+  auto* sw_page = ui->get_switch_page();
+
+  // Bank 6 (YDEN02.213)
+  add_bound_switch(sw_page, "Bank 6 Ch1", "electrical.switches.bank.6.1.state");
+  add_bound_switch(sw_page, "Bank 6 Ch2", "electrical.switches.bank.6.2.state");
+  add_bound_switch(sw_page, "Bank 6 Ch3", "electrical.switches.bank.6.3.state");
+  add_bound_switch(sw_page, "Bank 6 Ch4", "electrical.switches.bank.6.4.state");
+
+  // Bank 7 (YDEN02.171)
+  add_bound_switch(sw_page, "Bank 7 Ch1", "electrical.switches.bank.7.1.state");
+  add_bound_switch(sw_page, "Bank 7 Ch2", "electrical.switches.bank.7.2.state");
+  add_bound_switch(sw_page, "Bank 7 Ch3", "electrical.switches.bank.7.3.state");
+  add_bound_switch(sw_page, "Bank 7 Ch4", "electrical.switches.bank.7.4.state");
+
+  // Bank 12 (YDEN02.19)
+  add_bound_switch(sw_page, "Bank 12 Ch1", "electrical.switches.bank.12.1.state");
+  add_bound_switch(sw_page, "Bank 12 Ch2", "electrical.switches.bank.12.2.state");
+  add_bound_switch(sw_page, "Bank 12 Ch3", "electrical.switches.bank.12.3.state");
+  add_bound_switch(sw_page, "Bank 12 Ch4", "electrical.switches.bank.12.4.state");
 
   // N2K gateway
   auto* receiver =
@@ -59,14 +76,15 @@ void setup() {
   transmitter->start();
   n2k_server->start();
 
-  // LVGL runs at ~30fps from the main event loop
+  // LVGL at ~30fps
   event_loop()->onRepeat(33, [ui]() { ui->tick(); });
 
   // Heartbeat
   event_loop()->onRepeat(5000, [receiver, n2k_server]() {
-    ESP_LOGI("main", "n2k: rx=%u clients=%u | heap=%lu",
+    ESP_LOGI("main", "n2k: rx=%u clients=%u | bindings=%u | heap=%lu",
              (unsigned)receiver->rx_count(),
              (unsigned)n2k_server->connected_clients(),
+             (unsigned)bindings.size(),
              (unsigned long)esp_get_free_heap_size());
   });
 }
