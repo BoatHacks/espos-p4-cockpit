@@ -1,8 +1,8 @@
 /**
- * ESP32-P4 Cockpit — Phase 1: LVGL on screen with touch.
+ * ESP32-P4 Cockpit — Phase 3: Switch page with grid layout.
  *
- * Renders a simple LVGL UI on the Waveshare 7B display with touch input.
- * This validates the LVGL + MIPI-DSI + GT911 integration.
+ * Native LVGL UI with a tabbed interface. First tab shows a grid of
+ * toggle switches. Touch is handled locally — instant response.
  */
 
 #include <Arduino.h>
@@ -15,80 +15,32 @@
 using namespace sensesp;
 using namespace sensesp_cockpit_display;
 
-static uint32_t touch_count = 0;
-
-static void create_test_ui() {
-  // Dark background
-  lv_obj_t* scr = lv_screen_active();
-  lv_obj_set_style_bg_color(scr, lv_color_make(20, 25, 35), 0);
-
-  // Title
-  lv_obj_t* title = lv_label_create(scr);
-  lv_label_set_text(title, "Signal K Cockpit");
-  lv_obj_set_style_text_color(title, lv_color_make(220, 240, 255), 0);
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_36, 0);
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 20);
-
-  // Subtitle
-  lv_obj_t* sub = lv_label_create(scr);
-  lv_label_set_text(sub, "LVGL 9 + MIPI-DSI + GT911 Touch");
-  lv_obj_set_style_text_color(sub, lv_color_make(120, 140, 160), 0);
-  lv_obj_set_style_text_font(sub, &lv_font_montserrat_20, 0);
-  lv_obj_align(sub, LV_ALIGN_TOP_MID, 0, 70);
-
-  // Touch test button
-  lv_obj_t* btn = lv_btn_create(scr);
-  lv_obj_set_size(btn, 300, 80);
-  lv_obj_align(btn, LV_ALIGN_CENTER, 0, 0);
-  lv_obj_set_style_bg_color(btn, lv_color_make(40, 200, 80), 0);
-  lv_obj_set_style_bg_color(btn, lv_color_make(30, 150, 60),
-                            LV_STATE_PRESSED);
-
-  lv_obj_t* btn_label = lv_label_create(btn);
-  lv_label_set_text(btn_label, "Tap Me!");
-  lv_obj_set_style_text_font(btn_label, &lv_font_montserrat_28, 0);
-  lv_obj_center(btn_label);
-
-  // Touch counter label
-  lv_obj_t* counter = lv_label_create(scr);
-  lv_label_set_text(counter, "Touches: 0");
-  lv_obj_set_style_text_color(counter, lv_color_make(220, 200, 40), 0);
-  lv_obj_set_style_text_font(counter, &lv_font_montserrat_28, 0);
-  lv_obj_align(counter, LV_ALIGN_CENTER, 0, 80);
-
-  // Button event handler
-  lv_obj_add_event_cb(
-      btn,
-      [](lv_event_t* e) {
-        touch_count++;
-        lv_obj_t* lbl = static_cast<lv_obj_t*>(lv_event_get_user_data(e));
-        char buf[32];
-        snprintf(buf, sizeof(buf), "Touches: %lu",
-                 (unsigned long)touch_count);
-        lv_label_set_text(lbl, buf);
-      },
-      LV_EVENT_CLICKED, counter);
-
-  // Status bar at bottom
-  lv_obj_t* status = lv_label_create(scr);
-  lv_label_set_text(status, "Phase 1: Hardware validation");
-  lv_obj_set_style_text_color(status, lv_color_make(80, 100, 120), 0);
-  lv_obj_set_style_text_font(status, &lv_font_montserrat_16, 0);
-  lv_obj_align(status, LV_ALIGN_BOTTOM_MID, 0, -10);
-}
-
 void setup() {
   SetupLogging(ESP_LOG_INFO);
 
-  ESP_LOGI("main", "=== Cockpit Phase 1: LVGL ===");
+  ESP_LOGI("main", "=== Cockpit Phase 3: Switch Page ===");
 
-  // Initialize display + touch + LVGL
+  // Initialize display + touch + LVGL + UI
   auto* display = new Waveshare7BDisplay();
   auto* touch = new Waveshare7BTouch();
-  lvgl_init(display, touch);
+  auto* ui = new CockpitUI(display, touch);
+  ui->init();
 
-  // Create test UI
-  create_test_ui();
+  // Add switches — using placeholder names for now.
+  // Phase 4 will bind these to real SignalK paths.
+  auto* sw_page = ui->get_switch_page();
+  sw_page->add_switch("Nav Lights");
+  sw_page->add_switch("Anchor Light");
+  sw_page->add_switch("Deck Light");
+  sw_page->add_switch("Cabin Light");
+  sw_page->add_switch("Bilge Pump");
+  sw_page->add_switch("Water Pump");
+  sw_page->add_switch("Fridge");
+  sw_page->add_switch("Charger");
+  sw_page->add_switch("Instruments");
+  sw_page->add_switch("Horn");
+  sw_page->add_switch("Windlass");
+  sw_page->add_switch("Autopilot");
 
   // SensESP with WiFi
   SensESPAppBuilder builder;
@@ -107,15 +59,14 @@ void setup() {
   transmitter->start();
   n2k_server->start();
 
-  // LVGL runs from the main event loop at ~30fps
-  event_loop()->onRepeat(33, []() { lvgl_tick(); });
+  // LVGL runs at ~30fps from the main event loop
+  event_loop()->onRepeat(33, [ui]() { ui->tick(); });
 
   // Heartbeat
   event_loop()->onRepeat(5000, [receiver, n2k_server]() {
-    ESP_LOGI("main", "n2k: rx=%u clients=%u | touch=%lu | heap=%lu",
+    ESP_LOGI("main", "n2k: rx=%u clients=%u | heap=%lu",
              (unsigned)receiver->rx_count(),
              (unsigned)n2k_server->connected_clients(),
-             (unsigned long)touch_count,
              (unsigned long)esp_get_free_heap_size());
   });
 }
