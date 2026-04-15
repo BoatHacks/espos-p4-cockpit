@@ -24,6 +24,7 @@ using namespace sensesp;
 using namespace sensesp_cockpit_display;
 
 static std::vector<std::unique_ptr<SKSwitchBinding>> sw_bindings;
+static std::vector<std::unique_ptr<SKButtonBinding>> btn_bindings;
 static std::vector<std::unique_ptr<SKGaugeBinding>> gauge_bindings;
 static std::shared_ptr<sensesp::EspHostedBluedroidBLE> g_ble;
 static std::shared_ptr<sensesp::BLESignalKGateway> g_ble_gw;
@@ -36,6 +37,16 @@ static void add_switch_from_config(SwitchPage* page,
            (unsigned)def.bank, (unsigned)def.channel);
   auto* w = page->add_switch(def.label);
   sw_bindings.push_back(std::make_unique<SKSwitchBinding>(String(path), w));
+}
+
+static void add_button_from_config(ButtonSwitchPage* page,
+                                   const cockpit_config::Switch& def) {
+  char path[80];
+  snprintf(path, sizeof(path),
+           "electrical.switches.bank.%u.%u.state",
+           (unsigned)def.bank, (unsigned)def.channel);
+  auto* b = page->add_switch(def.label);
+  btn_bindings.push_back(std::make_unique<SKButtonBinding>(String(path), b));
 }
 
 static void add_gauge(InstrumentPage* page, const char* label,
@@ -65,17 +76,34 @@ void setup() {
   // Stream ESP_LOGx over TCP — connect with: nc p4-cockpit.local 2323
   remote_log_start(2323);
 
-  // --- Switches: limit to 24 on two pages for stability ---
-  auto* sw1 = ui->add_switch_page("SW1");
-  auto* sw2 = ui->add_switch_page("SW2");
-  int count = 0;
+  // --- Switches: all 53 using lightweight SwitchButton widgets ---
+  // Grouped by Maretron screen into short-named tabs.
+  std::map<std::string, std::string> tab_names = {
+      {"Switches",    "SW1"},
+      {"Switches 2",  "SW2"},
+      {"Watermaker",  "WM"},
+      {"Bilge Pumps", "Bilge"},
+  };
+  std::map<std::string, ButtonSwitchPage*> pages;
   for (const auto& s : cockpit_config::get_switches()) {
-    if (count >= 24) break;
-    add_switch_from_config(count < 12 ? sw1 : sw2, s);
-    count++;
+    std::string screen = s.screen ? s.screen : "Switches";
+    auto it = pages.find(screen);
+    ButtonSwitchPage* page;
+    if (it == pages.end()) {
+      auto name_it = tab_names.find(screen);
+      const char* tab = name_it != tab_names.end()
+                           ? name_it->second.c_str()
+                           : screen.c_str();
+      page = ui->add_button_switch_page(tab);
+      pages[screen] = page;
+    } else {
+      page = it->second;
+    }
+    add_button_from_config(page, s);
   }
-  ESP_LOGI("main", "Loaded %u switches across 2 pages",
-           (unsigned)sw_bindings.size());
+  ESP_LOGI("main", "Loaded %u switches across %u pages",
+           (unsigned)btn_bindings.size(),
+           (unsigned)pages.size());
   ui->finalize();
 
   // --- Status page: only basic WS state binding ---
@@ -161,9 +189,10 @@ void setup() {
 
   // Heartbeat log
   event_loop()->onRepeat(5000, [receiver]() {
-    ESP_LOGI("main", "n2k: rx=%u | sw=%u gauges=%u | heap=%lu",
+    ESP_LOGI("main", "n2k: rx=%u | sw=%u btn=%u gauges=%u | heap=%lu",
              (unsigned)receiver->rx_count(),
              (unsigned)sw_bindings.size(),
+             (unsigned)btn_bindings.size(),
              (unsigned)gauge_bindings.size(),
              (unsigned long)esp_get_free_heap_size());
   });
