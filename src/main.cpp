@@ -1,14 +1,11 @@
 /**
- * ESP32-P4 Cockpit — Phase 6: Switches + Instruments + Status page.
- *
- * Native LVGL UI with tabbed pages:
- *   - Switches: live N2K switch states with toggle control (PUT)
- *   - Instruments: live gauges bound to SignalK paths
- *   - Status: WiFi / SK WebSocket / N2K / BLE health indicators
+ * ESP32-P4 Cockpit — cockpit display with switches loaded from
+ * Maretron N2KView config import.
  */
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <cstdio>
 
 #include "sensesp_cockpit_display.h"
 #include "sensesp_cockpit_display/hal/boards/waveshare_7b.h"
@@ -19,6 +16,8 @@
 #include "sensesp/signalk/signalk_ws_client.h"
 #include "sensesp/system/lambda_consumer.h"
 
+#include "maretron_layout.h"
+
 using namespace sensesp;
 using namespace sensesp_cockpit_display;
 
@@ -27,11 +26,14 @@ static std::vector<std::unique_ptr<SKGaugeBinding>> gauge_bindings;
 static std::shared_ptr<sensesp::EspHostedBluedroidBLE> g_ble;
 static std::shared_ptr<sensesp::BLESignalKGateway> g_ble_gw;
 
-static void add_switch(SwitchPage* page, const char* label,
-                       const char* sk_path) {
-  auto* w = page->add_switch(label);
-  sw_bindings.push_back(
-      std::make_unique<SKSwitchBinding>(String(sk_path), w));
+static void add_switch_from_config(SwitchPage* page,
+                                   const cockpit_config::Switch& def) {
+  char path[80];
+  snprintf(path, sizeof(path),
+           "electrical.switches.bank.%u.%u.state",
+           (unsigned)def.bank, (unsigned)def.channel);
+  auto* w = page->add_switch(def.label);
+  sw_bindings.push_back(std::make_unique<SKSwitchBinding>(String(path), w));
 }
 
 static void add_gauge(InstrumentPage* page, const char* label,
@@ -58,20 +60,13 @@ void setup() {
                  ->enable_ota("cockpit-ota")
                  ->get_app();
 
-  // --- Switches ---
+  // --- Switches from Maretron config ---
   auto* sw = ui->get_switch_page();
-  add_switch(sw, "Bank 6 Ch1", "electrical.switches.bank.6.1.state");
-  add_switch(sw, "Bank 6 Ch2", "electrical.switches.bank.6.2.state");
-  add_switch(sw, "Bank 6 Ch3", "electrical.switches.bank.6.3.state");
-  add_switch(sw, "Bank 6 Ch4", "electrical.switches.bank.6.4.state");
-  add_switch(sw, "Bank 7 Ch1", "electrical.switches.bank.7.1.state");
-  add_switch(sw, "Bank 7 Ch2", "electrical.switches.bank.7.2.state");
-  add_switch(sw, "Bank 7 Ch3", "electrical.switches.bank.7.3.state");
-  add_switch(sw, "Bank 7 Ch4", "electrical.switches.bank.7.4.state");
-  add_switch(sw, "Bank 12 Ch1", "electrical.switches.bank.12.1.state");
-  add_switch(sw, "Bank 12 Ch2", "electrical.switches.bank.12.2.state");
-  add_switch(sw, "Bank 12 Ch3", "electrical.switches.bank.12.3.state");
-  add_switch(sw, "Bank 12 Ch4", "electrical.switches.bank.12.4.state");
+  for (const auto& s : cockpit_config::get_switches()) {
+    add_switch_from_config(sw, s);
+  }
+  ESP_LOGI("main", "Loaded %u switches from Maretron config",
+           (unsigned)sw_bindings.size());
 
   // --- Instruments ---
   auto* inst = ui->get_instrument_page();
@@ -101,8 +96,6 @@ void setup() {
 
   // --- Status page wiring ---
   auto* status = ui->get_status_page();
-
-  // SK WebSocket connection state → status indicator
   auto ws_client = app->get_ws_client();
   ws_client->connect_to(new LambdaConsumer<SKWSConnectionState>(
       [status](SKWSConnectionState state) {
@@ -123,7 +116,7 @@ void setup() {
         }
       }));
 
-  // --- BLE gateway (Bluedroid via C6 over esp_hosted) ---
+  // --- BLE gateway ---
   g_ble = std::make_shared<sensesp::EspHostedBluedroidBLE>();
   g_ble_gw = std::make_shared<sensesp::BLESignalKGateway>(
       g_ble, app->get_ws_client());
@@ -141,11 +134,10 @@ void setup() {
   // LVGL at ~30fps
   event_loop()->onRepeat(33, [ui]() { ui->tick(); });
 
-  // Update status page every 1s
+  // Status page update every 1s
   event_loop()->onRepeat(1000, [ui, receiver, n2k_server]() {
     auto* status = ui->get_status_page();
 
-    // WiFi status
     if (WiFi.status() == WL_CONNECTED) {
       char buf[32];
       snprintf(buf, sizeof(buf), "%s (%d dBm)",
@@ -155,7 +147,6 @@ void setup() {
       status->wifi()->set_status(StatusLevel::kError, "disconnected");
     }
 
-    // N2K status
     uint32_t rx = receiver->rx_count();
     static uint32_t last_rx = 0;
     if (rx > last_rx) {
@@ -168,7 +159,6 @@ void setup() {
     }
     last_rx = rx;
 
-    // BLE status
     if (g_ble && g_ble->is_scanning()) {
       char buf[48];
       snprintf(buf, sizeof(buf), "scanning, %u hits / %u posted",
@@ -181,7 +171,6 @@ void setup() {
       status->ble()->set_status(StatusLevel::kError, "no controller");
     }
 
-    // Info line
     status->update_info(millis() / 1000, esp_get_free_heap_size(),
                         rx, n2k_server->connected_clients());
   });
