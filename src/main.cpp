@@ -60,9 +60,15 @@ void setup() {
                  ->enable_ota("cockpit-ota")
                  ->get_app();
 
-  // --- Switches from Maretron config ---
+  // Stream ESP_LOGx over TCP — connect with: nc p4-cockpit.local 2323
+  remote_log_start(2323);
+
+  // --- Switches — load subset first to keep LVGL happy ---
+  // Full 53-switch + multi-tab version crashed; debugging via remote log.
   auto* sw = ui->get_switch_page();
+  int limit = 16;
   for (const auto& s : cockpit_config::get_switches()) {
+    if (limit-- <= 0) break;
     add_switch_from_config(sw, s);
   }
   ESP_LOGI("main", "Loaded %u switches from Maretron config",
