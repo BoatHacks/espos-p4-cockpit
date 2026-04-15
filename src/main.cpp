@@ -6,6 +6,8 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <cstdio>
+#include <map>
+#include <string>
 
 #include "sensesp_cockpit_display.h"
 #include "sensesp_cockpit_display/hal/boards/waveshare_7b.h"
@@ -63,44 +65,20 @@ void setup() {
   // Stream ESP_LOGx over TCP — connect with: nc p4-cockpit.local 2323
   remote_log_start(2323);
 
-  // --- Switches — load subset first to keep LVGL happy ---
-  // Full 53-switch + multi-tab version crashed; debugging via remote log.
-  auto* sw = ui->get_switch_page();
-  int limit = 16;
+  // --- Switches: limit to 24 on two pages for stability ---
+  auto* sw1 = ui->add_switch_page("SW1");
+  auto* sw2 = ui->add_switch_page("SW2");
+  int count = 0;
   for (const auto& s : cockpit_config::get_switches()) {
-    if (limit-- <= 0) break;
-    add_switch_from_config(sw, s);
+    if (count >= 24) break;
+    add_switch_from_config(count < 12 ? sw1 : sw2, s);
+    count++;
   }
-  ESP_LOGI("main", "Loaded %u switches from Maretron config",
+  ESP_LOGI("main", "Loaded %u switches across 2 pages",
            (unsigned)sw_bindings.size());
+  ui->finalize();
 
-  // --- Instruments ---
-  auto* inst = ui->get_instrument_page();
-  add_gauge(inst, "COG", "\xC2\xB0", "navigation.courseOverGroundTrue",
-            rad_to_deg, 0);
-  add_gauge(inst, "SOG", "kn", "navigation.speedOverGround", ms_to_knots, 1);
-  add_gauge(inst, "HDG", "\xC2\xB0", "navigation.headingTrue",
-            rad_to_deg, 0);
-  add_gauge(inst, "STW", "kn", "navigation.speedThroughWater",
-            ms_to_knots, 1);
-  add_gauge(inst, "DEPTH", "m", "environment.depth.surfaceToTransducer",
-            nullptr, 1);
-  add_gauge(inst, "WIND SPD", "kn", "environment.wind.speedApparent",
-            ms_to_knots, 1);
-  add_gauge(inst, "WIND ANG", "\xC2\xB0", "environment.wind.angleApparent",
-            rad_to_deg, 0);
-  add_gauge(inst, "PRESSURE", "hPa", "environment.outside.pressure",
-            pa_to_hpa, 0);
-  add_gauge(inst, "AIR TEMP", "\xC2\xB0""C", "environment.outside.temperature",
-            kelvin_to_c, 1);
-  add_gauge(inst, "WATER TEMP", "\xC2\xB0""C",
-            "environment.inside.temperature", kelvin_to_c, 1);
-  add_gauge(inst, "HUMIDITY", "%", "environment.inside.relativeHumidity",
-            ratio_to_pct, 0);
-  add_gauge(inst, "ROT", "\xC2\xB0/m", "navigation.rateOfTurn",
-            rad_to_deg, 2);
-
-  // --- Status page wiring ---
+  // --- Status page: only basic WS state binding ---
   auto* status = ui->get_status_page();
   auto ws_client = app->get_ws_client();
   ws_client->connect_to(new LambdaConsumer<SKWSConnectionState>(
