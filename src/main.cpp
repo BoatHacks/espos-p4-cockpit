@@ -87,6 +87,9 @@ void setup() {
   std::map<std::string, ButtonSwitchPage*> pages;
   for (const auto& s : cockpit_config::get_switches()) {
     std::string screen = s.screen ? s.screen : "Switches";
+    // Skip the Watermaker screen — its one switch is also on Switches 2
+    if (screen == "Watermaker") continue;
+
     auto it = pages.find(screen);
     ButtonSwitchPage* page;
     if (it == pages.end()) {
