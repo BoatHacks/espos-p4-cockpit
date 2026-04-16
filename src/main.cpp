@@ -191,12 +191,11 @@ void setup() {
   });
 
   // Heartbeat log
-  event_loop()->onRepeat(5000, [receiver]() {
-    ESP_LOGI("main", "n2k: rx=%u | sw=%u btn=%u gauges=%u | heap=%lu",
+  event_loop()->onRepeat(5000, [receiver, n2k_server]() {
+    ESP_LOGI("main", "n2k: rx=%u cl=%u | btn=%u | heap=%lu",
              (unsigned)receiver->rx_count(),
-             (unsigned)sw_bindings.size(),
+             (unsigned)n2k_server->connected_clients(),
              (unsigned)btn_bindings.size(),
-             (unsigned)gauge_bindings.size(),
              (unsigned long)esp_get_free_heap_size());
   });
 }
