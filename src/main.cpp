@@ -73,8 +73,12 @@ void setup() {
                  ->enable_ota("cockpit-ota")
                  ->get_app();
 
-  // Stream ESP_LOGx over TCP — connect with: nc p4-cockpit.local 2323
+  // Stream ESP_LOGx over TCP — connect with: nc <ip> 2323
   remote_log_start(2323);
+
+  // HTTP OTA — reliable over slow WiFi (TCP, not UDP like ArduinoOTA)
+  // Usage: curl -X POST --data-binary @firmware.bin http://<ip>:8080/update
+  http_ota_start(8080);
 
   // --- Switches: all 53 using lightweight SwitchButton widgets ---
   // Grouped by Maretron screen into short-named tabs.
@@ -131,11 +135,12 @@ void setup() {
         }
       }));
 
-  // --- BLE gateway ---
-  g_ble = std::make_shared<sensesp::EspHostedBluedroidBLE>();
-  g_ble_gw = std::make_shared<sensesp::BLESignalKGateway>(
-      g_ble, app->get_ws_client());
-  g_ble_gw->start();
+  // --- BLE gateway (disabled for now — saturates WiFi, breaks OTA) ---
+  // TODO: re-enable once OTA over esp_hosted WiFi is stable
+  // g_ble = std::make_shared<sensesp::EspHostedBluedroidBLE>();
+  // g_ble_gw = std::make_shared<sensesp::BLESignalKGateway>(
+  //     g_ble, app->get_ws_client());
+  // g_ble_gw->start();
 
   // --- N2K gateway ---
   auto* receiver =

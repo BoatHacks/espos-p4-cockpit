@@ -1,43 +1,33 @@
 #!/bin/bash
-# OTA flash to the running ESP32-P4 cockpit device.
+# OTA flash to the running ESP32-P4 cockpit device via HTTP.
+# Uses TCP (reliable over slow WiFi) instead of ArduinoOTA's UDP.
 #
 # Usage:
-#   ./ota.sh                       # uses p4-cockpit.local via mDNS
+#   ./ota.sh                       # uses 192.168.0.120
 #   ./ota.sh 192.168.0.123         # explicit IP
-#   OTA_PASSWORD=xyz ./ota.sh ...  # custom password
-#
-# Requires: the device running firmware that called
-#   enable_ota("cockpit-ota")
-# which is the case for this project.
 
 set -e
 
-TARGET=${1:-p4-cockpit.local}
-OTA_PASSWORD=${OTA_PASSWORD:-cockpit-ota}
-ESPOTA=$(find ~/.platformio/packages/framework-arduinoespressif32 -name espota.py | head -1)
-
-if [ -z "$ESPOTA" ]; then
-    echo "Error: espota.py not found in PlatformIO packages"
-    exit 1
-fi
+TARGET=${1:-192.168.0.120}
+PORT=${OTA_PORT:-8080}
 
 echo "==> Building firmware..."
 pio run
 
 FIRMWARE=.pio/build/p4_cockpit/firmware.bin
 if [ ! -f "$FIRMWARE" ]; then
-    echo "Error: firmware.bin not found at $FIRMWARE"
+    echo "Error: firmware.bin not found"
     exit 1
 fi
 
 SIZE=$(stat -c%s "$FIRMWARE")
-echo "==> Flashing $FIRMWARE ($SIZE bytes) via OTA to $TARGET..."
+echo "==> Uploading $FIRMWARE ($SIZE bytes) via HTTP to $TARGET:$PORT..."
 
-python3 "$ESPOTA" \
-    --ip="$TARGET" \
-    --port=3232 \
-    --auth="$OTA_PASSWORD" \
-    --file="$FIRMWARE" \
-    --progress
+curl --progress-bar \
+    -X POST \
+    --data-binary "@$FIRMWARE" \
+    -H "Content-Type: application/octet-stream" \
+    "http://$TARGET:$PORT/update"
 
-echo "==> Done"
+echo ""
+echo "==> Done — device will reboot"
