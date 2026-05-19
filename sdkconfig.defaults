@@ -61,6 +61,11 @@ CONFIG_LWIP_TCP_RECVMBOX_SIZE=64
 CONFIG_LWIP_UDP_RECVMBOX_SIZE=64
 CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
 
+# More sockets so the SensESP web UI's parallel browser fetches
+# (6-10 concurrent connections) aren't refused by httpd's default
+# max_open_sockets=7 (only 4 usable after 3 reserved).
+CONFIG_LWIP_MAX_SOCKETS=16
+
 # Raise lwIP TCP/IP task priority so it drains SDIO RX faster than
 # application tasks can re-fill it. Catches "task still writing Rx data
 # to queue!" floods under heavy parallel HTTP load (e.g. web UI).
