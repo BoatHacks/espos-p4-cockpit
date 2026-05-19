@@ -168,13 +168,16 @@ void setup() {
         transmitter->stop();
       });
 
-  // Watchdog: reboot if WiFi disconnects or heap exhausts.
-  // The N2K-stall check is intentionally NOT here — false-positives when
-  // CAN bus is intermittent or the boat is in a quiet area (no N2K traffic
-  // for >90s with SK still connected to candump triggered spurious reboots).
-  // Every 30s; tolerate 3 consecutive failures before restart.
+  // Watchdog: reboot if WiFi disconnects, heap exhausts, or N2K rx
+  // is stalled *after we have seen at least one frame* (so we don't
+  // false-positive when the CAN bus is genuinely silent or
+  // disconnected). Every 30s; tolerate 3 consecutive failures.
   event_loop()->onRepeat(30000, [receiver, n2k_server]() {
     static int consecutive_fail = 0;
+    static uint32_t last_rx = 0;
+    static bool ever_received = false;
+    uint32_t rx_now = receiver->rx_count();
+    if (rx_now > 0) ever_received = true;
     bool ok = true;
     const char* reason = "";
 
@@ -184,7 +187,14 @@ void setup() {
     } else if (esp_get_free_heap_size() < 64 * 1024) {
       ok = false;
       reason = "heap exhausted";
+    } else if (ever_received && n2k_server->connected_clients() > 0 &&
+               rx_now == last_rx) {
+      // We've seen N2K traffic before, SK is consuming, but no new
+      // frames for 30s — TWAI / SDIO link likely wedged.
+      ok = false;
+      reason = "n2k rx stalled (after previously active)";
     }
+    last_rx = rx_now;
 
     if (!ok) {
       consecutive_fail++;
