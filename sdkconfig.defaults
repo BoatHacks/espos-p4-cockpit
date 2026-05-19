@@ -59,6 +59,13 @@ CONFIG_LWIP_TCP_SND_BUF_DEFAULT=65534
 CONFIG_LWIP_TCP_WND_DEFAULT=65534
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=64
 CONFIG_LWIP_UDP_RECVMBOX_SIZE=64
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
+
+# Raise lwIP TCP/IP task priority so it drains SDIO RX faster than
+# application tasks can re-fill it. Catches "task still writing Rx data
+# to queue!" floods under heavy parallel HTTP load (e.g. web UI).
+# Note: 64 is the max RECVMBOX size without enabling LWIP_WND_SCALE.
+CONFIG_LWIP_TCPIP_TASK_PRIO=23
 
 # WiFi Remote — high-throughput profile per esp-hosted-mcu#184 advice
 CONFIG_WIFI_RMT_STATIC_RX_BUFFER_NUM=16
