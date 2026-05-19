@@ -168,12 +168,13 @@ void setup() {
         transmitter->stop();
       });
 
-  // Watchdog: reboot if WiFi disconnects, heap drops, or
-  // N2K rx hangs while a candump client is connected.
+  // Watchdog: reboot if WiFi disconnects or heap exhausts.
+  // The N2K-stall check is intentionally NOT here — false-positives when
+  // CAN bus is intermittent or the boat is in a quiet area (no N2K traffic
+  // for >90s with SK still connected to candump triggered spurious reboots).
   // Every 30s; tolerate 3 consecutive failures before restart.
   event_loop()->onRepeat(30000, [receiver, n2k_server]() {
     static int consecutive_fail = 0;
-    static uint32_t last_rx = 0;
     bool ok = true;
     const char* reason = "";
 
@@ -183,13 +184,7 @@ void setup() {
     } else if (esp_get_free_heap_size() < 64 * 1024) {
       ok = false;
       reason = "heap exhausted";
-    } else if (n2k_server->connected_clients() > 0 &&
-               receiver->rx_count() == last_rx) {
-      // Client is consuming candump but N2K rx stopped — TWAI hung.
-      ok = false;
-      reason = "n2k rx stalled with active client";
     }
-    last_rx = receiver->rx_count();
 
     if (!ok) {
       consecutive_fail++;
