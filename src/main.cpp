@@ -174,10 +174,6 @@ void setup() {
   // disconnected). Every 30s; tolerate 3 consecutive failures.
   event_loop()->onRepeat(30000, [receiver, n2k_server]() {
     static int consecutive_fail = 0;
-    static uint32_t last_rx = 0;
-    static bool ever_received = false;
-    uint32_t rx_now = receiver->rx_count();
-    if (rx_now > 0) ever_received = true;
     bool ok = true;
     const char* reason = "";
 
@@ -187,14 +183,14 @@ void setup() {
     } else if (esp_get_free_heap_size() < 64 * 1024) {
       ok = false;
       reason = "heap exhausted";
-    } else if (ever_received && n2k_server->connected_clients() > 0 &&
-               rx_now == last_rx) {
+    } else if (receiver->ever_received() &&
+               n2k_server->connected_clients() > 0 &&
+               receiver->seconds_since_last_rx() > 30) {
       // We've seen N2K traffic before, SK is consuming, but no new
-      // frames for 30s — TWAI / SDIO link likely wedged.
+      // frames for 30+s — TWAI / SDIO link likely wedged.
       ok = false;
       reason = "n2k rx stalled (after previously active)";
     }
-    last_rx = rx_now;
 
     if (!ok) {
       consecutive_fail++;
@@ -226,17 +222,21 @@ void setup() {
       status->wifi()->set_status(StatusLevel::kError, "disconnected");
     }
 
-    uint32_t rx = receiver->rx_count();
-    static uint32_t last_rx = 0;
-    if (rx > last_rx) {
-      char buf[32];
-      snprintf(buf, sizeof(buf), "%lu frames, %u clients",
-               (unsigned long)rx, (unsigned)n2k_server->connected_clients());
-      status->n2k()->set_status(StatusLevel::kOk, buf);
-    } else if (rx == 0) {
+    int64_t rx_idle = receiver->seconds_since_last_rx();
+    if (!receiver->ever_received()) {
       status->n2k()->set_status(StatusLevel::kWarning, "no frames yet");
+    } else if (rx_idle < 2) {
+      char buf[32];
+      snprintf(buf, sizeof(buf), "live, %u clients",
+               (unsigned)n2k_server->connected_clients());
+      status->n2k()->set_status(StatusLevel::kOk, buf);
+    } else {
+      char buf[40];
+      snprintf(buf, sizeof(buf), "idle %llds, %u clients",
+               (long long)rx_idle,
+               (unsigned)n2k_server->connected_clients());
+      status->n2k()->set_status(StatusLevel::kWarning, buf);
     }
-    last_rx = rx;
 
     if (g_ble && g_ble->is_scanning()) {
       char buf[48];
@@ -250,14 +250,18 @@ void setup() {
       status->ble()->set_status(StatusLevel::kError, "no controller");
     }
 
-    status->update_info(millis() / 1000, esp_get_free_heap_size(),
-                        rx, n2k_server->connected_clients());
+    status->update_info(
+        millis() / 1000, esp_get_free_heap_size(),
+        receiver->ever_received() ? rx_idle : -1,
+        n2k_server->connected_clients());
   });
 
   // Heartbeat log
   event_loop()->onRepeat(5000, [receiver, n2k_server]() {
-    ESP_LOGI("main", "n2k: rx=%u cl=%u | btn=%u | heap=%lu",
-             (unsigned)receiver->rx_count(),
+    int64_t rx_idle = receiver->seconds_since_last_rx();
+    ESP_LOGI("main",
+             "n2k: rx_idle=%llds cl=%u | btn=%u | heap=%lu",
+             (long long)(receiver->ever_received() ? rx_idle : -1),
              (unsigned)n2k_server->connected_clients(),
              (unsigned)btn_bindings.size(),
              (unsigned long)esp_get_free_heap_size());
