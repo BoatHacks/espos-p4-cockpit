@@ -8,6 +8,9 @@
 #include <cstdio>
 #include <map>
 #include <string>
+#include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "sensesp_cockpit_display.h"
 #include "sensesp_cockpit_display/hal/boards/waveshare_7b.h"
@@ -69,9 +72,13 @@ void setup() {
   SensESPAppBuilder builder;
   auto app = builder.set_hostname("p4-cockpit")
                  ->set_wifi_client("MOIN", "Moin2018!")
+                 ->set_wifi_access_point("", "")  // disable soft-AP
                  ->set_sk_server("192.168.0.148", 3000)
-                 ->enable_ota("cockpit-ota")
                  ->get_app();
+  // NOTE: set_wifi_access_point("","") above disables the captive-portal
+  // soft-AP. Without this, SensESP starts an AP on 192.168.4.1 at boot which
+  // binds port 80 and prevents the main HTTP web UI from starting.
+  // ArduinoOTA also previously stayed off — we use HTTP OTA on :8080 instead.
 
   // Stream ESP_LOGx over TCP — connect with: nc <ip> 2323
   remote_log_start(2323);
@@ -150,6 +157,53 @@ void setup() {
   receiver->start();
   transmitter->start();
   n2k_server->start();
+
+  // Quiesce N2K when OTA starts — N2K traffic + candump TX saturates SDIO
+  // and stalls OTA. After OTA succeeds the device reboots; if it fails
+  // the user can power-cycle. No resume path needed.
+  sensesp_cockpit_display::set_ota_quiesce_callback(
+      [receiver, transmitter, n2k_server]() {
+        n2k_server->stop();
+        receiver->stop();
+        transmitter->stop();
+      });
+
+  // Watchdog: reboot if WiFi disconnects, heap drops, or
+  // N2K rx hangs while a candump client is connected.
+  // Every 30s; tolerate 3 consecutive failures before restart.
+  event_loop()->onRepeat(30000, [receiver, n2k_server]() {
+    static int consecutive_fail = 0;
+    static uint32_t last_rx = 0;
+    bool ok = true;
+    const char* reason = "";
+
+    if (WiFi.status() != WL_CONNECTED) {
+      ok = false;
+      reason = "wifi disconnected";
+    } else if (esp_get_free_heap_size() < 64 * 1024) {
+      ok = false;
+      reason = "heap exhausted";
+    } else if (n2k_server->connected_clients() > 0 &&
+               receiver->rx_count() == last_rx) {
+      // Client is consuming candump but N2K rx stopped — TWAI hung.
+      ok = false;
+      reason = "n2k rx stalled with active client";
+    }
+    last_rx = receiver->rx_count();
+
+    if (!ok) {
+      consecutive_fail++;
+      ESP_LOGW("watchdog", "health check FAIL %d/3: %s",
+               consecutive_fail, reason);
+      if (consecutive_fail >= 3) {
+        ESP_LOGE("watchdog", "rebooting due to: %s", reason);
+        vTaskDelay(pdMS_TO_TICKS(200));  // let log drain
+        esp_restart();
+      }
+    } else {
+      consecutive_fail = 0;
+    }
+  });
 
   // LVGL at ~30fps
   event_loop()->onRepeat(33, [ui]() { ui->tick(); });
