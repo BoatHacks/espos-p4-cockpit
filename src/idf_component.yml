@@ -1,0 +1,21 @@
+## Override transitive esp_hosted dependency.
+##
+## SensESP's esp_wifi_remote 1.5.1 declares "espressif/esp_hosted: >=2.11",
+## which resolved to 2.12.3 when our dependencies.lock was first generated
+## and stays locked there. Pinning a stricter version here forces the
+## component manager to re-resolve to 2.12.7+, which includes:
+##
+##   - a914274d  fix(sdio): gracefully drop on RX mempool exhaustion
+##                (replaces assert(pkt_rxbuff) with drop+log)
+##   - 971cf0d8  fix(sdio): throttle the RX-drop log message so the host
+##                console isn't spammed under sustained RX pressure
+##
+## Neither fixes the SDIO wedge symptom in upstream issue
+## espressif/esp-hosted-mcu#197 (the actual fix is the unreleased
+## SPIRAM mempool work, da48eef4 on main), but they remove the only
+## hard-assert crash path and stop the log flood.
+dependencies:
+  espressif/esp_hosted:
+    version: "~2.12.7"
+    rules:
+      - if: "target in [esp32p4, esp32h2]"
