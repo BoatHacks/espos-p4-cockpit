@@ -48,19 +48,21 @@ int32_t scale_to_steps(float display_value, float min, float max) {
 
 // ---- label ----
 //
-// Optional `bind`: subscribes to a numeric path (Float subject) and
-// formats per `display { unit, scale, offset, decimals }`. If `bind` is
-// omitted, the label shows the static `label` text.
+// Three render modes:
+//   - caption only (no `bind`)     -> one large-font line of static text
+//   - bind only   (no `label`)     -> one large-font line of formatted value
+//   - both                         -> small-font caption on top, large-font
+//                                     value below (typical HMI tile layout)
 lv_obj_t* build_label(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
-  lv_obj_t* lbl = lv_label_create(ctx.parent);
-  apply_geometry(lbl, spec);
-  lv_obj_set_style_text_color(lbl, lv_color_hex(kFgHex), LV_PART_MAIN);
-  lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, LV_PART_MAIN);
-
   const char* path = spec["bind"] | (const char*)nullptr;
   const char* caption = spec["label"] | (const char*)nullptr;
 
+  // No bind: single static text label, return that directly.
   if (!path) {
+    lv_obj_t* lbl = lv_label_create(ctx.parent);
+    apply_geometry(lbl, spec);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(kFgHex), LV_PART_MAIN);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, LV_PART_MAIN);
     lv_label_set_text(lbl, caption ? caption : "");
     return lbl;
   }
@@ -69,12 +71,38 @@ lv_obj_t* build_label(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   if (!sub) { *err = std::string("kind conflict on ") + path; return nullptr; }
   ctx.live_paths.insert(path);
 
-  // Display config travels via user_data so the observer doesn't need
-  // its own closure capture.
+  // With a bind we always need a container so we can stack caption +
+  // value (when caption is present) or center the value (when not).
+  lv_obj_t* root = lv_obj_create(ctx.parent);
+  apply_geometry(root, spec);
+  lv_obj_set_style_bg_opa(root, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_border_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_radius(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(root, 4, LV_PART_MAIN);
+  lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
+
+  if (caption && *caption) {
+    lv_obj_t* cap = lv_label_create(root);
+    lv_obj_set_style_text_color(cap, lv_color_hex(kMutedHex), LV_PART_MAIN);
+    lv_obj_set_style_text_font(cap, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_label_set_text(cap, caption);
+    lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 0, 0);
+  }
+
+  lv_obj_t* val = lv_label_create(root);
+  lv_obj_set_style_text_color(val, lv_color_hex(kFgHex), LV_PART_MAIN);
+  lv_obj_set_style_text_font(val, &lv_font_montserrat_28, LV_PART_MAIN);
+  lv_label_set_text(val, "—");
+  if (caption && *caption) {
+    lv_obj_align(val, LV_ALIGN_TOP_LEFT, 0, 20);
+  } else {
+    lv_obj_center(val);
+  }
+
   auto* d = new Disp(parse_display(spec));
-  lv_obj_set_user_data(lbl, d);
+  lv_obj_set_user_data(val, d);
   lv_obj_add_event_cb(
-      lbl,
+      val,
       [](lv_event_t* e) {
         delete static_cast<Disp*>(lv_obj_get_user_data(
             static_cast<lv_obj_t*>(lv_event_get_target(e))));
@@ -89,11 +117,9 @@ lv_obj_t* build_label(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
         float v = lv_subject_get_float(s) * d->scale + d->offset;
         lv_label_set_text_fmt(w, "%.*f %s", d->decimals, v, d->unit);
       },
-      lbl, nullptr);
+      val, nullptr);
 
-  // Initial placeholder until first delta arrives.
-  lv_label_set_text(lbl, "—");
-  return lbl;
+  return root;
 }
 
 // ---- toggle ----
