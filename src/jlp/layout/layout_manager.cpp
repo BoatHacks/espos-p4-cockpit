@@ -115,29 +115,28 @@ ApplyResult LayoutManager::apply(const std::string& json, ApplySource src) {
 
   if (!validate(doc.as<JsonObjectConst>(), &r.err)) return r;
 
-  // v1 non-atomic swap. Step 5 introduces detached-parent staging.
-  if (current_root_) {
-    lv_obj_delete(current_root_);
-    current_root_ = nullptr;
-  }
-
-  lv_obj_t* root = lv_obj_create(parent_);
-  lv_obj_set_size(root, lv_pct(100), lv_pct(100));
-  lv_obj_set_style_bg_opa(root, LV_OPA_TRANSP, LV_PART_MAIN);
-  lv_obj_set_style_border_width(root, 0, LV_PART_MAIN);
-  lv_obj_set_style_radius(root, 0, LV_PART_MAIN);
-  lv_obj_set_style_pad_all(root, 0, LV_PART_MAIN);
-  lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
+  // Atomic swap: build under a detached parent, then re-parent on
+  // success. If the build fails, the current layout stays up untouched.
+  lv_obj_t* staging = lv_obj_create(NULL);
+  lv_obj_set_size(staging, lv_pct(100), lv_pct(100));
+  lv_obj_set_style_bg_opa(staging, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_border_width(staging, 0, LV_PART_MAIN);
+  lv_obj_set_style_radius(staging, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(staging, 0, LV_PART_MAIN);
+  lv_obj_clear_flag(staging, LV_OBJ_FLAG_SCROLLABLE);
 
   std::set<std::string> live_paths;
   JsonArrayConst screens = doc["screens"];
-  if (!build_screens(root, screens, registry(), &r.err, &live_paths,
+  if (!build_screens(staging, screens, registry(), &r.err, &live_paths,
                      &r.widgets)) {
-    lv_obj_delete(root);
+    lv_obj_delete(staging);
     return r;
   }
 
-  current_root_ = root;
+  lv_obj_t* old_root = current_root_;
+  lv_obj_set_parent(staging, parent_);
+  current_root_ = staging;
+  if (old_root) lv_obj_delete(old_root);
   r.ok = true;
   const char* name = doc["name"] | "(unnamed)";
   r.name = name;
