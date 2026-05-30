@@ -74,10 +74,19 @@ void ZoneRegistry::fetch_task(void* arg) {
     return;
   }
 
-  esp_err_t err = esp_http_client_open(client, 0);
+  // Retry a few times — early boot the network might not be up yet
+  // when the widget builder calls fetch_async.
+  esp_err_t err = ESP_FAIL;
+  for (int attempt = 0; attempt < 8; ++attempt) {
+    err = esp_http_client_open(client, 0);
+    if (err == ESP_OK) break;
+    ESP_LOGI(TAG, "%s: meta unreachable (%s) attempt %d/8, retry in 5s",
+             a->path.c_str(), esp_err_to_name(err), attempt + 1);
+    vTaskDelay(pdMS_TO_TICKS(5000));
+  }
   if (err != ESP_OK) {
-    ESP_LOGI(TAG, "%s: meta unreachable (%s); zones disabled for this path",
-             a->path.c_str(), esp_err_to_name(err));
+    ESP_LOGW(TAG, "%s: meta unreachable after 8 attempts, giving up",
+             a->path.c_str());
     esp_http_client_cleanup(client);
     delete a;
     vTaskDelete(NULL);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lvgl.h"
+#include <functional>
 #include <string>
 
 namespace jlp {
@@ -21,6 +22,14 @@ class LayoutManager {
   // `parent` is where the screens/tabview goes. Set once at boot.
   void init(lv_obj_t* parent);
 
+  // Called after every successful layout swap. Used to force a WS
+  // reconnect so SensESP re-sends its subscribe message including any
+  // listeners newly created for the just-applied layout. (SensESP
+  // only subscribes once at on_connected; new listeners added later
+  // are silently ignored until reconnect.)
+  using PostSwapHook = std::function<void()>;
+  void set_post_swap_hook(PostSwapHook h) { post_swap_ = std::move(h); }
+
   // Parses, validates, builds, and (on success) swaps in the new
   // layout. On failure, the current layout stays up.
   ApplyResult apply(const std::string& json, ApplySource src);
@@ -33,6 +42,7 @@ class LayoutManager {
   lv_obj_t* current_root_ = nullptr;
   std::string active_name_;
   ApplySource active_source_ = ApplySource::Boot;
+  PostSwapHook post_swap_;
 };
 
 LayoutManager& layout_manager();

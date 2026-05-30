@@ -167,6 +167,7 @@ ApplyResult LayoutManager::apply(const std::string& json, ApplySource src) {
 
   active_name_ = doc["name"] | "(unnamed)";
   active_source_ = src;
+  if (post_swap_) post_swap_();
   r.ok = true;
   r.name = active_name_;
   r.screens = screens.size();
