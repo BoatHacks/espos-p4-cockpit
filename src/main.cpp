@@ -8,6 +8,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <cstdio>
+#include <string>
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -24,6 +25,7 @@
 
 #include "jlp/default_layout.h"
 #include "jlp/layout/layout_manager.h"
+#include "jlp/layout/store.h"
 #include "jlp/net/http_api.h"
 #include "jlp/status_overlay.h"
 #include "jlp/subject_registry.h"
@@ -41,10 +43,23 @@ void setup() {
   jlp::overlay().set_hostname("p4-cockpit");
 
   jlp::layout_manager().init(jlp::overlay().content_root());
-  auto r = jlp::layout_manager().apply(jlp::kDefaultLayoutJson,
-                                       jlp::ApplySource::BootDefault);
+
+  jlp::store_init();
+  std::string stored;
+  jlp::ApplyResult r;
+  if (jlp::store_read(&stored)) {
+    r = jlp::layout_manager().apply(stored, jlp::ApplySource::BootStore);
+    if (!r.ok) {
+      ESP_LOGW("main", "stored layout rejected (%s); falling back to default",
+               r.err.c_str());
+    }
+  }
   if (!r.ok) {
-    ESP_LOGE("main", "default layout rejected: %s", r.err.c_str());
+    r = jlp::layout_manager().apply(jlp::kDefaultLayoutJson,
+                                    jlp::ApplySource::BootDefault);
+    if (!r.ok) {
+      ESP_LOGE("main", "default layout rejected: %s", r.err.c_str());
+    }
   }
 
   SensESPAppBuilder builder;

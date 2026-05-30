@@ -7,6 +7,7 @@
 
 #include "../subject_registry.h"
 #include "../widgets/widget_factory.h"
+#include "store.h"
 
 static const char* TAG = "jlp.layout";
 
@@ -137,6 +138,12 @@ ApplyResult LayoutManager::apply(const std::string& json, ApplySource src) {
   lv_obj_set_parent(staging, parent_);
   current_root_ = staging;
   if (old_root) lv_obj_delete(old_root);
+
+  // Persist only after a successful swap, and only for pushed layouts
+  // (boot paths re-read the same persisted blob).
+  if (src == ApplySource::PostLayout) {
+    store_write_atomic(json);
+  }
   r.ok = true;
   const char* name = doc["name"] | "(unnamed)";
   r.name = name;
