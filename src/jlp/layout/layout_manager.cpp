@@ -116,15 +116,22 @@ ApplyResult LayoutManager::apply(const std::string& json, ApplySource src) {
 
   if (!validate(doc.as<JsonObjectConst>(), &r.err)) return r;
 
-  // Atomic swap: build under a detached parent, then re-parent on
-  // success. If the build fails, the current layout stays up untouched.
-  lv_obj_t* staging = lv_obj_create(NULL);
+  // Atomic swap: build the new tree as a child of `parent_` but hidden,
+  // then unhide on success and delete the old. If the build fails, the
+  // current layout stays up untouched.
+  //
+  // (Earlier this code used lv_obj_create(NULL) which creates a SCREEN,
+  // not a regular object — re-parenting a screen under another object
+  // is undefined in LVGL 9 and resulted in widgets that never rendered.)
+  lv_obj_t* staging = lv_obj_create(parent_);
   lv_obj_set_size(staging, lv_pct(100), lv_pct(100));
+  lv_obj_set_pos(staging, 0, 0);
   lv_obj_set_style_bg_opa(staging, LV_OPA_TRANSP, LV_PART_MAIN);
   lv_obj_set_style_border_width(staging, 0, LV_PART_MAIN);
   lv_obj_set_style_radius(staging, 0, LV_PART_MAIN);
   lv_obj_set_style_pad_all(staging, 0, LV_PART_MAIN);
   lv_obj_clear_flag(staging, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(staging, LV_OBJ_FLAG_HIDDEN);
 
   std::set<std::string> live_paths;
   JsonArrayConst screens = doc["screens"];
@@ -135,7 +142,7 @@ ApplyResult LayoutManager::apply(const std::string& json, ApplySource src) {
   }
 
   lv_obj_t* old_root = current_root_;
-  lv_obj_set_parent(staging, parent_);
+  lv_obj_clear_flag(staging, LV_OBJ_FLAG_HIDDEN);
   current_root_ = staging;
   if (old_root) lv_obj_delete(old_root);
 
