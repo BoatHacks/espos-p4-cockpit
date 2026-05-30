@@ -39,6 +39,7 @@ typedef enum {
 	// features supported
 	ESP_WLAN_SUPPORT         = (1 << 4),
 	ESP_BT_INTERFACE_SUPPORT = (1 << 5), // bt supported over current interface
+	ESP_OT_SUPPORT           = (1 << 6), // openthread supported
 	// leave a gap for future expansion
 
 	// Hosted UART interface

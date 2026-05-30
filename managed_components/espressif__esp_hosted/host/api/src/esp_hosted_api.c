@@ -13,6 +13,7 @@ extern "C" {
 #include "esp_hosted_api_priv.h"
 #include "esp_hosted_wifi_remote_glue.h"
 #include "port_esp_hosted_host_wifi_config.h"
+#include "port_esp_hosted_host_openthread.h"
 #include "port_esp_hosted_host_os.h"
 #include "esp_hosted_misc.h"
 #include "esp_check.h"
@@ -23,6 +24,10 @@ extern "C" {
 
 #if H_DPP_SUPPORT
 #include "esp_dpp.h"
+#endif
+
+#if H_OT_HOST_ENABLE
+#include "esp_hosted_openthread.h"
 #endif
 
 /** Macros **/
@@ -897,6 +902,38 @@ esp_err_t esp_hosted_set_mem_monitor(esp_hosted_config_mem_monitor_t *config, es
 		return ESP_ERR_INVALID_ARG;
 	}
 	return rpc_iface_set_mem_monitor(config, curr_mem_info);
+}
+#endif
+
+#if H_OT_HOST_ENABLE
+esp_err_t esp_hosted_openthread_rcp_init(void)
+{
+	check_transport_up();
+	return rpc_iface_openthread_rcp_init();
+}
+
+esp_err_t esp_hosted_openthread_rcp_deinit(void)
+{
+	check_transport_up();
+	return rpc_iface_openthread_rcp_deinit();
+}
+
+esp_err_t esp_hosted_openthread_rcp_start(void)
+{
+	check_transport_up();
+	return rpc_iface_openthread_rcp_start();
+}
+
+esp_err_t esp_hosted_openthread_rcp_stop(void)
+{
+	check_transport_up();
+	return rpc_iface_openthread_rcp_stop();
+}
+
+esp_err_t esp_hosted_openthread_rcp_query(esp_hosted_openthread_query_t query)
+{
+	check_transport_up();
+	return rpc_iface_openthread_rcp_query(query);
 }
 #endif
 

@@ -711,12 +711,31 @@ menu "Example Configuration"
 					Baud Rate to Use. Make sure Hardware supports the rate.
 					Standard rates are 9600, 19200, 38400, 57600, 115200, 460800, 921600
 
-			config ESP_UART_NUM_DATA_BITS
-				int "Number of Data Bits"
-				default 8
-				range 5 8
+			choice ESP_UART_PRIV_NUM_DATA_BITS
+				bool "Number of Data Bits"
+				default ESP_UART_PRIV_NUM_DATA_BITS_8
 				help
 					Number of Data Bits to use
+
+				config ESP_UART_PRIV_NUM_DATA_BITS_5
+					bool "5 Bits"
+
+				config ESP_UART_PRIV_NUM_DATA_BITS_6
+					bool "6 Bits"
+
+				config ESP_UART_PRIV_NUM_DATA_BITS_7
+					bool "7 Bits"
+
+				config ESP_UART_PRIV_NUM_DATA_BITS_8
+					bool "8 Bits"
+			endchoice
+
+			config ESP_UART_NUM_DATA_BITS
+				int
+				default 0 if ESP_UART_PRIV_NUM_DATA_BITS_5
+				default 1 if ESP_UART_PRIV_NUM_DATA_BITS_6
+				default 2 if ESP_UART_PRIV_NUM_DATA_BITS_7
+				default 3 if ESP_UART_PRIV_NUM_DATA_BITS_8
 
 			choice ESP_UART_PRIV_PARITY
 				bool "Parity"
@@ -734,8 +753,8 @@ menu "Example Configuration"
 			config ESP_UART_PARITY
 				int
 				default 0 if ESP_UART_PRIV_PARITY_NONE
-				default 1 if ESP_UART_PRIV_PARITY_EVEN
-				default 2 if ESP_UART_PRIV_PARITY_ODD
+				default 2 if ESP_UART_PRIV_PARITY_EVEN
+				default 3 if ESP_UART_PRIV_PARITY_ODD
 
 			choice ESP_UART_PRIV_STOP_BITS
 				bool "Number of Stop Bits"
@@ -752,9 +771,9 @@ menu "Example Configuration"
 
 			config ESP_UART_STOP_BITS
 				int
-				default 0 if ESP_UART_PRIV_STOP_BITS_1
-				default 1 if ESP_UART_PRIV_STOP_BITS_1_5
-				default 2 if ESP_UART_PRIV_STOP_BITS_2
+				default 1 if ESP_UART_PRIV_STOP_BITS_1
+				default 2 if ESP_UART_PRIV_STOP_BITS_1_5
+				default 3 if ESP_UART_PRIV_STOP_BITS_2
 
 			config ESP_UART_GPIO_RESET
 				int "Slave GPIO pin to reset itself"
@@ -965,7 +984,7 @@ menu "Example Configuration"
 		help
 			Default task priority of ESP-Hosted tasks
 
-	config ESP_CACHE_MALLOC
+	config ESP_HOSTED_USE_MEMPOOL
 		bool "Enable Mempool"
 		default y
 		help
@@ -1000,6 +1019,19 @@ menu "Example Configuration"
 		default n
 		help
 			Enable Wi-Fi Easy Connect (DPP) support
+
+	menuconfig ESP_HOSTED_OT_RCP_ENABLED
+		depends on OPENTHREAD_ENABLED
+		bool "Enable OpenThread RCP (Radio Co-Processor)"
+		default n
+		help
+			"Enable OpenThread RCP (Radio Co-Processor) support"
+
+	if ESP_HOSTED_OT_RCP_ENABLED
+
+	   rsource ./Kconfig.openthread
+
+	endif
 
 	config ESP_HOSTED_ALLOW_FULL_APP_DESC
 		bool "Return the Full App Descriptor"
@@ -1384,20 +1416,24 @@ endif
 
 	config ESP_HOSTED_CP_EXT_COEX
 		bool "External Coexistence support (Host controls slave external co-ex)"
-		select ESP_COEX_EXTERNAL_COEXIST_ENABLE if !(BT_ENABLED || NIMBLE_ENABLED) && !IDF_TARGET_ESP32 && ESP_COEX_ENABLED
+		select ESP_COEX_EXTERNAL_COEXIST_ENABLE if ((!BT_CONTROLLER_ENABLED && !IDF_TARGET_ESP32) || SOC_EXTERNAL_COEX_ADVANCE) && ESP_COEX_ENABLED
 		default n
 		help
 			Enable RPC handlers for external coexistence configuration from the host.
-			Requires CONFIG_EXTERNAL_COEX_ENABLE (Component config -> Wi-Fi -> External coexistence).
+			Requires CONFIG_ESP_COEX_EXTERNAL_COEXIST_ENABLE
+			(Component config → Wireless Coexistence → External Coexistence).
+
+			On chips with SOC_EXTERNAL_COEX_ADVANCE, external coexistence works
+			alongside Bluetooth. On other chips, BT controller must be disabled.
 
 	if ESP_HOSTED_CP_EXT_COEX
 
-		if BT_ENABLED
-			comment "⚠️  DISABLE idf BT for external coex. Disable BT_ENABLED (Component config → Bluetooth => Bluetooth)"
+		if BT_CONTROLLER_ENABLED && !SOC_EXTERNAL_COEX_ADVANCE
+			comment "⚠️  BT controller conflicts with external coex on this chip. Disable BT_CONTROLLER_ENABLED or use a chip with SOC_EXTERNAL_COEX_ADVANCE."
 		endif
 
-		if ESP_HOSTED_COPROCESSOR_BT_ENABLED
-			comment "⚠️  DISABLE Hosted BT flag for external coex. Disable ESP_HOSTED_COPROCESSOR_BT_ENABLED (Example Configuration => Enable BT sharing via hosted)"
+		if ESP_HOSTED_COPROCESSOR_BT_ENABLED && !SOC_EXTERNAL_COEX_ADVANCE
+			comment "⚠️  Hosted BT (controller on co-processor) conflicts with external coex on this chip. Disable ESP_HOSTED_COPROCESSOR_BT_ENABLED or use a chip with SOC_EXTERNAL_COEX_ADVANCE."
 		endif
 
 		if IDF_TARGET_ESP32
@@ -1409,7 +1445,7 @@ endif
 		endif
 
 		if !ESP_COEX_EXTERNAL_COEXIST_ENABLE
-			comment "⚠️  Enable WiFi external coexistence, ESP_COEX_EXTERNAL_COEXIST_ENABLE (Component config → Wireless Coexistence => External Coexistence)"
+			comment "⚠️  Enable WiFi external coexistence, ESP_COEX_EXTERNAL_COEXIST_ENABLE (Component config → Wireless Coexistence → External Coexistence)"
 		endif
 
 	endif

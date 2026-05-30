@@ -32085,18 +32085,20 @@ const ProtobufCEnumDescriptor rpc_type__descriptor =
   rpc_type__value_ranges,
   NULL,NULL,NULL,NULL   /* reserved[1234] */
 };
-static const ProtobufCEnumValue rpc_feature__enum_values_by_number[2] =
+static const ProtobufCEnumValue rpc_feature__enum_values_by_number[3] =
 {
   { "Feature_None", "RPC_FEATURE__Feature_None", 0 },
   { "Feature_Bluetooth", "RPC_FEATURE__Feature_Bluetooth", 1 },
+  { "Feature_Openthread_Rcp", "RPC_FEATURE__Feature_Openthread_Rcp", 2 },
 };
 static const ProtobufCIntRange rpc_feature__value_ranges[] = {
-{0, 0},{0, 2}
+{0, 0},{0, 3}
 };
-static const ProtobufCEnumValueIndex rpc_feature__enum_values_by_name[2] =
+static const ProtobufCEnumValueIndex rpc_feature__enum_values_by_name[3] =
 {
   { "Feature_Bluetooth", 1 },
   { "Feature_None", 0 },
+  { "Feature_Openthread_Rcp", 2 },
 };
 const ProtobufCEnumDescriptor rpc_feature__descriptor =
 {
@@ -32105,32 +32107,42 @@ const ProtobufCEnumDescriptor rpc_feature__descriptor =
   "RpcFeature",
   "RpcFeature",
   "",
-  2,
+  3,
   rpc_feature__enum_values_by_number,
-  2,
+  3,
   rpc_feature__enum_values_by_name,
   1,
   rpc_feature__value_ranges,
   NULL,NULL,NULL,NULL   /* reserved[1234] */
 };
-static const ProtobufCEnumValue rpc_feature_command__enum_values_by_number[5] =
+static const ProtobufCEnumValue rpc_feature_command__enum_values_by_number[10] =
 {
   { "Feature_Command_None", "RPC_FEATURE_COMMAND__Feature_Command_None", 0 },
   { "Feature_Command_BT_Init", "RPC_FEATURE_COMMAND__Feature_Command_BT_Init", 1 },
   { "Feature_Command_BT_Deinit", "RPC_FEATURE_COMMAND__Feature_Command_BT_Deinit", 2 },
   { "Feature_Command_BT_Enable", "RPC_FEATURE_COMMAND__Feature_Command_BT_Enable", 3 },
   { "Feature_Command_BT_Disable", "RPC_FEATURE_COMMAND__Feature_Command_BT_Disable", 4 },
+  { "Feature_Command_Init", "RPC_FEATURE_COMMAND__Feature_Command_Init", 5 },
+  { "Feature_Command_Deinit", "RPC_FEATURE_COMMAND__Feature_Command_Deinit", 6 },
+  { "Feature_Command_Enable", "RPC_FEATURE_COMMAND__Feature_Command_Enable", 7 },
+  { "Feature_Command_Disable", "RPC_FEATURE_COMMAND__Feature_Command_Disable", 8 },
+  { "Feature_Command_Query", "RPC_FEATURE_COMMAND__Feature_Command_Query", 9 },
 };
 static const ProtobufCIntRange rpc_feature_command__value_ranges[] = {
-{0, 0},{0, 5}
+{0, 0},{0, 10}
 };
-static const ProtobufCEnumValueIndex rpc_feature_command__enum_values_by_name[5] =
+static const ProtobufCEnumValueIndex rpc_feature_command__enum_values_by_name[10] =
 {
   { "Feature_Command_BT_Deinit", 2 },
   { "Feature_Command_BT_Disable", 4 },
   { "Feature_Command_BT_Enable", 3 },
   { "Feature_Command_BT_Init", 1 },
+  { "Feature_Command_Deinit", 6 },
+  { "Feature_Command_Disable", 8 },
+  { "Feature_Command_Enable", 7 },
+  { "Feature_Command_Init", 5 },
   { "Feature_Command_None", 0 },
+  { "Feature_Command_Query", 9 },
 };
 const ProtobufCEnumDescriptor rpc_feature_command__descriptor =
 {
@@ -32139,26 +32151,34 @@ const ProtobufCEnumDescriptor rpc_feature_command__descriptor =
   "RpcFeatureCommand",
   "RpcFeatureCommand",
   "",
-  5,
+  10,
   rpc_feature_command__enum_values_by_number,
-  5,
+  10,
   rpc_feature_command__enum_values_by_name,
   1,
   rpc_feature_command__value_ranges,
   NULL,NULL,NULL,NULL   /* reserved[1234] */
 };
-static const ProtobufCEnumValue rpc_feature_option__enum_values_by_number[2] =
+static const ProtobufCEnumValue rpc_feature_option__enum_values_by_number[6] =
 {
   { "Feature_Option_None", "RPC_FEATURE_OPTION__Feature_Option_None", 0 },
   { "Feature_Option_BT_Deinit_Release_Memory", "RPC_FEATURE_OPTION__Feature_Option_BT_Deinit_Release_Memory", 1 },
+  { "Feature_Option_Query_Configured", "RPC_FEATURE_OPTION__Feature_Option_Query_Configured", 2 },
+  { "Feature_Option_Query_Inited", "RPC_FEATURE_OPTION__Feature_Option_Query_Inited", 3 },
+  { "Feature_Option_Query_Enabled", "RPC_FEATURE_OPTION__Feature_Option_Query_Enabled", 4 },
+  { "Feature_Option_Query_Ready", "RPC_FEATURE_OPTION__Feature_Option_Query_Ready", 5 },
 };
 static const ProtobufCIntRange rpc_feature_option__value_ranges[] = {
-{0, 0},{0, 2}
+{0, 0},{0, 6}
 };
-static const ProtobufCEnumValueIndex rpc_feature_option__enum_values_by_name[2] =
+static const ProtobufCEnumValueIndex rpc_feature_option__enum_values_by_name[6] =
 {
   { "Feature_Option_BT_Deinit_Release_Memory", 1 },
   { "Feature_Option_None", 0 },
+  { "Feature_Option_Query_Configured", 2 },
+  { "Feature_Option_Query_Enabled", 4 },
+  { "Feature_Option_Query_Inited", 3 },
+  { "Feature_Option_Query_Ready", 5 },
 };
 const ProtobufCEnumDescriptor rpc_feature_option__descriptor =
 {
@@ -32167,9 +32187,9 @@ const ProtobufCEnumDescriptor rpc_feature_option__descriptor =
   "RpcFeatureOption",
   "RpcFeatureOption",
   "",
-  2,
+  6,
   rpc_feature_option__enum_values_by_number,
-  2,
+  6,
   rpc_feature_option__enum_values_by_name,
   1,
   rpc_feature_option__value_ranges,

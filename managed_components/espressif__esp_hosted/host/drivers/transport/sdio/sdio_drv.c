@@ -89,6 +89,9 @@
 #include "port_esp_hosted_host_config.h"
 #include "esp_hosted_event.h"
 
+#include "mempool.h"
+#include "transport_util.h"
+
 static const char TAG[] = "H_SDIO_DRV";
 
 /* when enabled, read all required SDIO slave registers in a single
@@ -102,6 +105,24 @@ static const char TAG[] = "H_SDIO_DRV";
 // default queue sizes if unable to get from transport config
 #define DEFAULT_TO_SLAVE_QUEUE_SIZE       20
 #define DEFAULT_FROM_SLAVE_QUEUE_SIZE     20
+
+#if H_USE_MEMPOOL
+/*
+ * Tx is expected to be mainly zerocopy tx of packets allocated in transport_drv,
+ * so a minimal Tx mempool is required to handle that, plus serial and bt data
+ *
+ * Rx needs a larger mempool based on expected Rx packets of:
+ * - network data (largest user)
+ * - serial data (minimal)
+ * - bt data (minimal)
+ */
+
+#define MIN_MEMPOOL_BT_PACKETS        3
+#define MIN_MEMPOOL_SERIAL_PACKETS    3
+#define MIN_MEMPOOL_NET_PACKETS       5
+
+#define MIN_MEMPOOL_REQ (MIN_MEMPOOL_BT_PACKETS + MIN_MEMPOOL_SERIAL_PACKETS + MIN_MEMPOOL_NET_PACKETS)
+#endif
 
 #define RX_TASK_STACK_SIZE                CONFIG_ESP_HOSTED_DFLT_TASK_STACK
 #define TX_TASK_STACK_SIZE                CONFIG_ESP_HOSTED_DFLT_TASK_STACK
@@ -150,8 +171,10 @@ static void * sdio_bus_lock;
 static uint8_t *reg_buf = NULL;
 #endif
 
+#if H_USE_MEMPOOL
 /* Create mempool for cache mallocs */
-static struct mempool * buf_mp_g;
+static hosted_mempool_t * buf_mp_g;
+#endif
 
 extern transport_channel_t *chan_arr[ESP_MAX_IF];
 
@@ -170,6 +193,12 @@ static uint32_t sdio_tx_buf_count = 0;
 
 /* Counter to hold the amount of bytes already received from sdio slave */
 static uint32_t sdio_rx_byte_count = 0;
+
+/* True between "OOM start" and "OOM end" log lines. RX and TX share buf_mp_g,
+ * so one flag covers both paths: whichever fails first logs OOM start;
+ * whichever next allocates successfully logs OOM end and clears the flag.
+ * Touched only from the rx and tx tasks. */
+static bool mempool_oom_logged = false;
 
 // one-time trigger to start write thread
 static bool sdio_start_write_thread = false;
@@ -207,29 +236,43 @@ static void sdio_write_task(void const* pvParameters);
 static void sdio_read_task(void const* pvParameters);
 static void sdio_process_rx_task(void const* pvParameters);
 
-static inline void sdio_mempool_create(void)
+static inline void sdio_mempool_create(int tx_q_size, int rx_q_size)
 {
-	buf_mp_g = mempool_create(MAX_SDIO_BUFFER_SIZE);
-#ifdef H_USE_MEMPOOL
+#if H_USE_MEMPOOL
+	hosted_mempool_config_t config = {
+		.pre_allocated_mem = NULL,
+		.pre_allocated_mem_size = 0,
+		// allocate enough blocks to handle full RX and possible peak tx requests
+		.num_blocks = rx_q_size + MIN_MEMPOOL_REQ,
+		.block_size = MAX_SDIO_BUFFER_SIZE,
+		.alignment_in_bytes = HOSTED_MEM_ALIGNMENT_64,
+		.malloc = transport_util_malloc,
+		.calloc = transport_util_calloc,
+		.memset = g_h.funcs->_h_memset,
+		.free   = g_h.funcs->_h_free,
+	};
+	buf_mp_g = hosted_mempool_create(&config);
 	assert(buf_mp_g);
 #endif
 }
 
 static inline void sdio_mempool_destroy(void)
 {
+#if H_USE_MEMPOOL
 	ESP_LOGD(TAG, "Destroying SDIO mempool");
-	mempool_destroy(buf_mp_g);
+	hosted_mempool_destroy(buf_mp_g);
 	buf_mp_g = NULL;
+#endif
 }
 
 static inline void *sdio_buffer_alloc(uint need_memset)
 {
-	return mempool_alloc(buf_mp_g, MAX_SDIO_BUFFER_SIZE, need_memset);
+	MEMPOOL_ALLOC(buf_mp_g, MAX_SDIO_BUFFER_SIZE, need_memset);
 }
 
 static inline void sdio_buffer_free(void *buf)
 {
-	mempool_free(buf_mp_g, buf);
+	MEMPOOL_FREE(buf_mp_g, buf);
 }
 
 void bus_deinit_internal(void *bus_handle)
@@ -337,6 +380,7 @@ void bus_deinit_internal(void *bus_handle)
 	/* Reset SDIO counters */
 	sdio_tx_buf_count = 0;
 	sdio_rx_byte_count = 0;
+	mempool_oom_logged = false;
 	sdio_start_write_thread = false;
 
 	sdio_mempool_destroy();
@@ -587,7 +631,6 @@ static void sdio_write_task(void const* pvParameters)
 
 		if (!buf_handle.payload_zcopy) {
 			sendbuf = sdio_buffer_alloc(MEMSET_REQUIRED);
-			assert(sendbuf);
 			free_func = sdio_buffer_free;
 		} else {
 			sendbuf = buf_handle.payload;
@@ -595,9 +638,23 @@ static void sdio_write_task(void const* pvParameters)
 		}
 
 		if (!sendbuf) {
-			ESP_LOGE(TAG, "sdio buff malloc failed");
+			if (!mempool_oom_logged) {
+				ESP_LOGW(TAG, "mempool OOM start (TX)");
+				mempool_oom_logged = true;
+			}
 			free_func = NULL;
+#if ESP_PKT_STATS
+			if (buf_handle.if_type == ESP_STA_IF)
+				pkt_stats.sta_tx_out_drop++;
+#endif
 			goto done;
+		}
+
+		/* Non-zerocopy alloc just succeeded -> pool has space.
+		 * Zerocopy path doesn't touch the pool, so doesn't signal end. */
+		if (!buf_handle.payload_zcopy && mempool_oom_logged) {
+			ESP_LOGW(TAG, "mempool OOM end");
+			mempool_oom_logged = false;
 		}
 
 		if (buf_handle.payload_len > MAX_SDIO_BUFFER_SIZE - sizeof(struct esp_payload_header)) {
@@ -925,12 +982,31 @@ static esp_err_t sdio_push_data_to_queue(uint8_t * buf, uint32_t buf_len)
 		}
 		/* Allocate rx buffer */
 		pkt_rxbuff = sdio_buffer_alloc(MEMSET_REQUIRED);
-		assert(pkt_rxbuff);
+		if (!pkt_rxbuff) {
+			if (!mempool_oom_logged) {
+				ESP_LOGW(TAG, "mempool OOM start (RX)");
+				mempool_oom_logged = true;
+			}
+			/* Skip this packet and continue processing remaining stream data */
+			packet_size = len + offset;
+			if (packet_size > buf_len) {
+				return ESP_FAIL;
+			}
+			buf_len -= packet_size;
+			buf     += packet_size;
+			continue;
+		}
+
+		if (mempool_oom_logged) {
+			ESP_LOGW(TAG, "mempool OOM end");
+			mempool_oom_logged = false;
+		}
 
 		packet_size = len + offset;
 		if (packet_size > buf_len) {
 			ESP_LOGE(TAG, "packet size[%lu]>[%lu] too big for remaining stream data",
 					packet_size, buf_len);
+			sdio_buffer_free(pkt_rxbuff);
 			return ESP_FAIL;
 		}
 		memcpy(pkt_rxbuff, buf, packet_size);
@@ -1383,7 +1459,7 @@ void *bus_init_internal(void)
 		assert(to_slave_queue[prio_q_idx]);
 	}
 
-	sdio_mempool_create();
+	sdio_mempool_create(tx_queue_size, rx_queue_size);
 
 	/* initialise SDMMC before starting read/write threads
 	 * which depend on SDMMC*/

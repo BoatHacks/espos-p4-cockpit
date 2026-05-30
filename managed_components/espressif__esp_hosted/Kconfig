@@ -625,12 +625,14 @@ ESP32XX_SPI_CLK_FREQ_RANGE_MAX := 40
 
 		config ESP_HOSTED_SPI_TX_Q_SIZE
 			int "ESP to Host SPI queue size"
+			default 7 if OPENTHREAD_ENABLED
 			default 20
 			help
 				Very small tx queue will lower ESP -- SPI --> Host data rate
 
 		config ESP_HOSTED_SPI_RX_Q_SIZE
 			int "Host to ESP SPI queue size"
+			default 7 if OPENTHREAD_ENABLED
 			default 20
 			help
 				Very small RX queue will lower ESP <-- SPI -- Host data rate
@@ -1105,12 +1107,14 @@ ESP32XX_SDIO_CLK_FREQ_KHZ_RANGE_MAX := 50000
 
 			config ESP_HOSTED_SDIO_TX_Q_SIZE
 				int "Host SDIO Tx queue size"
+				default 10 if OPENTHREAD_ENABLED
 				default 20
 				help
 					Very small tx queue will lower data rate
 
 			config ESP_HOSTED_SDIO_RX_Q_SIZE
 				int "Host SDIO Rx queue size"
+				default 10 if OPENTHREAD_ENABLED
 				default 20
 				help
 					Very small RX queue will lower data rate
@@ -1475,12 +1479,14 @@ ESP32XX_SPI_HD_CLK_FREQ_RANGE_MAX := 40
 
 		config ESP_HOSTED_SPI_HD_TX_Q_SIZE
 			int "ESP to Host queue size"
+			default 10 if OPENTHREAD_ENABLED
 			default 20
 			help
 				Very small tx queue will lower ESP -- SPI Half-duplex --> Host data rate
 
 		config ESP_HOSTED_SPI_HD_RX_Q_SIZE
 			int "Host to ESP queue size"
+			default 10 if OPENTHREAD_ENABLED
 			default 20
 			help
 				Very small RX queue will lower ESP <-- SPI Half-duplex -- Host data rate
@@ -1591,12 +1597,31 @@ ESP32XX_SPI_HD_CLK_FREQ_RANGE_MAX := 40
 			help
 				Baud Rate to Use. Make sure Hardware supports the rate. Standard rates are 9600, 19200, 38400, 57600, 115200, 460800, 921600
 
-		config ESP_HOSTED_UART_NUM_DATA_BITS
-			int "Number of Data Bits"
-			default 8
-			range 5 8
+		choice ESP_HOSTED_UART_PRIV_NUM_DATA_BITS
+			bool "Number of Data Bits"
+			default ESP_HOSTED_UART_PRIV_NUM_DATA_BITS_8
 			help
 				Number of Data Bits to use
+
+			config ESP_HOSTED_UART_PRIV_NUM_DATA_BITS_5
+				bool "5 Bits"
+
+			config ESP_HOSTED_UART_PRIV_NUM_DATA_BITS_6
+				bool "6 Bits"
+
+			config ESP_HOSTED_UART_PRIV_NUM_DATA_BITS_7
+				bool "7 Bits"
+
+			config ESP_HOSTED_UART_PRIV_NUM_DATA_BITS_8
+				bool "8 Bits"
+		endchoice
+
+		config ESP_HOSTED_UART_NUM_DATA_BITS
+			int
+			default 0 if ESP_HOSTED_UART_PRIV_NUM_DATA_BITS_5
+			default 1 if ESP_HOSTED_UART_PRIV_NUM_DATA_BITS_6
+			default 2 if ESP_HOSTED_UART_PRIV_NUM_DATA_BITS_7
+			default 3 if ESP_HOSTED_UART_PRIV_NUM_DATA_BITS_8
 
 		choice ESP_HOSTED_UART_PRIV_PARITY
 			bool "Parity"
@@ -1614,8 +1639,8 @@ ESP32XX_SPI_HD_CLK_FREQ_RANGE_MAX := 40
 		config ESP_HOSTED_UART_PARITY
 			int
 			default 0 if ESP_HOSTED_UART_PRIV_PARITY_NONE
-			default 1 if ESP_HOSTED_UART_PRIV_PARITY_EVEN
-			default 2 if ESP_HOSTED_UART_PRIV_PARITY_ODD
+			default 2 if ESP_HOSTED_UART_PRIV_PARITY_EVEN
+			default 3 if ESP_HOSTED_UART_PRIV_PARITY_ODD
 
 		choice ESP_HOSTED_UART_PRIV_STOP_BITS
 			bool "Number of Stop Bits"
@@ -1632,9 +1657,9 @@ ESP32XX_SPI_HD_CLK_FREQ_RANGE_MAX := 40
 
 		config ESP_HOSTED_UART_STOP_BITS
 			int
-			default 0 if ESP_HOSTED_UART_PRIV_STOP_BITS_1
-			default 1 if ESP_HOSTED_UART_PRIV_STOP_BITS_1_5
-			default 2 if ESP_HOSTED_UART_PRIV_STOP_BITS_2
+			default 1 if ESP_HOSTED_UART_PRIV_STOP_BITS_1
+			default 2 if ESP_HOSTED_UART_PRIV_STOP_BITS_1_5
+			default 3 if ESP_HOSTED_UART_PRIV_STOP_BITS_2
 
 		config ESP_HOSTED_UART_GPIO_RESET_SLAVE
 			int "GPIO pin for Resetting slave ESP"
@@ -1876,11 +1901,145 @@ ESP32XX_SPI_HD_CLK_FREQ_RANGE_MAX := 40
 			URIs used to generate the QR code should be less than this length.
 			Increase this value if the received URI can be larger
 
+	menuconfig ESP_HOSTED_OT_HOST_ENABLE
+		depends on OPENTHREAD_ENABLED
+		bool "Enable OpenThread Host Support"
+		default n
+		help
+			"Enable OpenThread Host support. It will communicate with the OpenThread RCP on the co-processor"
+
+	if ESP_HOSTED_OT_HOST_ENABLE
+
+		if !OPENTHREAD_FTD
+			comment "Full Thread Device must be selected:"
+			comment"   Component config → OpenThread → Thread Core Features"
+			comment"      → Thread device type → Full Thread Device"
+		endif
+
+		choice ESP_HOSTED_OT_INTERFACE
+			bool "OpenThread Transport"
+			default ESP_HOSTED_OT_TRANSPORT_UART
+			help
+				Transport used communicate with OpenThread RCP
+
+			config ESP_HOSTED_OT_TRANSPORT_HOSTED
+				bool "Use ESP-Hosted Transport"
+				help
+					Use ESP-Hosted transport to communicate with OpenThread Host
+
+			config ESP_HOSTED_OT_TRANSPORT_UART
+				bool "UART"
+				help
+					Use UART to communicate with OpenThread RCP
+		endchoice
+
+		if ESP_HOSTED_OT_TRANSPORT_UART
+
+		   comment " :warning: OpenThread UART port and Hosted UART transport port is same — pick a different UART port"
+      	   		   depends on ESP_HOSTED_UART_HOST_INTERFACE && ESP_HOSTED_OT_UART_PORT = ESP_HOSTED_UART_PORT
+
+			config ESP_HOSTED_OT_UART_PORT
+				int "UART Port to Use"
+				default 1
+				range 0 4 if IDF_TARGET_ESP32P4
+				range 0 1 if IDF_TARGET_ESP32H2
+				help
+					Select UART Port to Use. Do not select the UART Port used for console output (if enabled)
+
+			# GPIO that connects to the RCP Tx pins
+			config ESP_HOSTED_OT_PIN_TO_RCP_TX
+				int "Pin to RCP TX"
+				default 4
+				help
+					GPIO used to connect to Tx Pin on RCP
+
+			# GPIO that connects to the RCP Rx pins
+			config ESP_HOSTED_OT_PIN_TO_RCP_RX
+				int "Pin to RCP RX"
+				default 5
+				help
+					GPIO used to connect to Rx Pin on RCP
+
+			config ESP_HOSTED_OT_UART_BAUDRATE
+				int "Baud Rate"
+				default 460800
+				range 9600 3500000
+				help
+					Baud Rate to Use. Make sure Hardware supports the rate. Standard rates are 9600, 19200, 38400, 57600, 115200, 460800, 921600
+
+			choice ESP_HOSTED_OT_UART_PRIV_NUM_DATA_BITS
+				bool "Number of Data Bits"
+				default ESP_HOSTED_OT_UART_PRIV_NUM_DATA_BITS_8
+				help
+					Number of Data Bits to use
+
+				config ESP_HOSTED_OT_UART_PRIV_NUM_DATA_BITS_5
+					bool "5 Bits"
+
+				config ESP_HOSTED_OT_UART_PRIV_NUM_DATA_BITS_6
+					bool "6 Bits"
+
+				config ESP_HOSTED_OT_UART_PRIV_NUM_DATA_BITS_7
+					bool "7 Bits"
+
+				config ESP_HOSTED_OT_UART_PRIV_NUM_DATA_BITS_8
+					bool "8 Bits"
+			endchoice
+
+			config ESP_HOSTED_OT_UART_NUM_DATA_BITS
+				int
+				default 0 if ESP_HOSTED_OT_UART_PRIV_NUM_DATA_BITS_5
+				default 1 if ESP_HOSTED_OT_UART_PRIV_NUM_DATA_BITS_6
+				default 2 if ESP_HOSTED_OT_UART_PRIV_NUM_DATA_BITS_7
+				default 3 if ESP_HOSTED_OT_UART_PRIV_NUM_DATA_BITS_8
+
+			choice ESP_HOSTED_OT_UART_PRIV_PARITY
+				bool "Parity"
+
+				config ESP_HOSTED_OT_UART_PRIV_PARITY_NONE
+					bool "None"
+
+				config ESP_HOSTED_OT_UART_PRIV_PARITY_EVEN
+					bool "Even"
+
+				config ESP_HOSTED_OT_UART_PRIV_PARITY_ODD
+					bool "Odd"
+			endchoice
+
+			config ESP_HOSTED_OT_UART_PARITY
+				int
+				default 0 if ESP_HOSTED_OT_UART_PRIV_PARITY_NONE
+				default 2 if ESP_HOSTED_OT_UART_PRIV_PARITY_EVEN
+				default 3 if ESP_HOSTED_OT_UART_PRIV_PARITY_ODD
+
+			choice ESP_HOSTED_OT_UART_PRIV_STOP_BITS
+				bool "Number of Stop Bits"
+
+				config ESP_HOSTED_OT_UART_PRIV_STOP_BITS_1
+					bool "1"
+
+				config ESP_HOSTED_OT_UART_PRIV_STOP_BITS_1_5
+					bool "1.5"
+
+				config ESP_HOSTED_OT_UART_PRIV_STOP_BITS_2
+					bool "2"
+			endchoice
+
+			config ESP_HOSTED_OT_UART_STOP_BITS
+				int
+				default 1 if ESP_HOSTED_OT_UART_PRIV_STOP_BITS_1
+				default 2 if ESP_HOSTED_OT_UART_PRIV_STOP_BITS_1_5
+				default 3 if ESP_HOSTED_OT_UART_PRIV_STOP_BITS_2
+
+		endif
+
+	endif
+
 	config ESP_HOSTED_USE_MEMPOOL
-		bool "Cache allocated memory like mempool - helps to reduce malloc calls"
+		bool "Enable Mempool"
 		default y
 		help
-			Cache allocated memory - reduces number of malloc calls
+			Mempool will help to alloc buffer without going to heap for every memory allocation or free
 
 	config ESP_HOSTED_MAX_SIMULTANEOUS_SYNC_RPC_REQUESTS
 		int "Maximum number of simultaneous synchronous RPC Request"

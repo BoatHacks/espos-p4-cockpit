@@ -371,10 +371,14 @@ typedef enum _RpcFeature {
   /*
    * Bluetooth (BT) Feature
    */
+  RPC_FEATURE__Feature_Bluetooth = 1,
+  /*
+   * OpenThread RCP (Radio Co-processor) Feature
+   */
   /*
    * add additional features here
    */
-  RPC_FEATURE__Feature_Bluetooth = 1
+  RPC_FEATURE__Feature_Openthread_Rcp = 2
     PROTOBUF_C__FORCE_ENUM_TO_BE_INT_SIZE(RPC_FEATURE)
 } RpcFeature;
 typedef enum _RpcFeatureCommand {
@@ -385,10 +389,19 @@ typedef enum _RpcFeatureCommand {
   RPC_FEATURE_COMMAND__Feature_Command_BT_Init = 1,
   RPC_FEATURE_COMMAND__Feature_Command_BT_Deinit = 2,
   RPC_FEATURE_COMMAND__Feature_Command_BT_Enable = 3,
+  RPC_FEATURE_COMMAND__Feature_Command_BT_Disable = 4,
+  /*
+   * Generic Feature Commands. Currently used for:
+   * - OpenThread (OT)
+   */
+  RPC_FEATURE_COMMAND__Feature_Command_Init = 5,
+  RPC_FEATURE_COMMAND__Feature_Command_Deinit = 6,
+  RPC_FEATURE_COMMAND__Feature_Command_Enable = 7,
+  RPC_FEATURE_COMMAND__Feature_Command_Disable = 8,
   /*
    * add additional feature commands here
    */
-  RPC_FEATURE_COMMAND__Feature_Command_BT_Disable = 4
+  RPC_FEATURE_COMMAND__Feature_Command_Query = 9
     PROTOBUF_C__FORCE_ENUM_TO_BE_INT_SIZE(RPC_FEATURE_COMMAND)
 } RpcFeatureCommand;
 typedef enum _RpcFeatureOption {
@@ -399,7 +412,27 @@ typedef enum _RpcFeatureOption {
   /*
    * release memory when deinit BT
    */
-  RPC_FEATURE_OPTION__Feature_Option_BT_Deinit_Release_Memory = 1
+  RPC_FEATURE_OPTION__Feature_Option_BT_Deinit_Release_Memory = 1,
+  /*
+   * Generic Queries. Currently used for:
+   * - OpenThread (OT)
+   */
+  /*
+   * is the feature configured (via Kconfig)
+   */
+  RPC_FEATURE_OPTION__Feature_Option_Query_Configured = 2,
+  /*
+   * is the feature initialised
+   */
+  RPC_FEATURE_OPTION__Feature_Option_Query_Inited = 3,
+  /*
+   * is the feature enabled
+   */
+  RPC_FEATURE_OPTION__Feature_Option_Query_Enabled = 4,
+  /*
+   * is the feature ready
+   */
+  RPC_FEATURE_OPTION__Feature_Option_Query_Ready = 5
     PROTOBUF_C__FORCE_ENUM_TO_BE_INT_SIZE(RPC_FEATURE_OPTION)
 } RpcFeatureOption;
 typedef enum _RpcId {

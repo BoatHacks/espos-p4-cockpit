@@ -3,19 +3,16 @@
 ## SensESP's esp_wifi_remote 1.5.1 declares "espressif/esp_hosted: >=2.11",
 ## which resolved to 2.12.3 when our dependencies.lock was first generated
 ## and stays locked there. Pinning a stricter version here forces the
-## component manager to re-resolve to 2.12.7+, which includes:
+## component manager to re-resolve to 2.12.7 (the most stable release we
+## have tested with the cockpit workload).
 ##
-##   - a914274d  fix(sdio): gracefully drop on RX mempool exhaustion
-##                (replaces assert(pkt_rxbuff) with drop+log)
-##   - 971cf0d8  fix(sdio): throttle the RX-drop log message so the host
-##                console isn't spammed under sustained RX pressure
-##
-## Neither fixes the SDIO wedge symptom in upstream issue
-## espressif/esp-hosted-mcu#197 (the actual fix is the unreleased
-## SPIRAM mempool work, da48eef4 on main), but they remove the only
-## hard-assert crash path and stop the log flood.
+## 2.12.8 (incl. SPIRAM mempool knob) was tested 2026-05-23 and does
+## NOT fix the streaming-class wedge from espressif/esp-hosted-mcu#197.
+## Tested both `MEMPOOL_PREFER_SPIRAM=y` and `=n`; both wedge in <20s
+## under sustained 500 KB/s inbound TCP, while 2.12.7 holds for ~13min.
+## Pinning to exact 2.12.7 since `~2.12.7` resolved upward to 2.12.8.
 dependencies:
   espressif/esp_hosted:
-    version: "~2.12.7"
+    version: "==2.12.7"
     rules:
       - if: "target in [esp32p4, esp32h2]"
