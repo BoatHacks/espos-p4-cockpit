@@ -23,9 +23,70 @@
 #include "sensesp/system/lambda_consumer.h"
 
 #include "jlp/status_overlay.h"
+#include "jlp/subject_registry.h"
 
 using namespace sensesp;
 using namespace sensesp_cockpit_display;
+
+namespace {
+
+// Step-3 demo: one toggle + one label bound via the SubjectRegistry. In
+// step 4 this is replaced by the JSON builder.
+void build_demo_layout(lv_obj_t* parent) {
+  // --- Toggle: switches.bank.0.0 ---
+  {
+    lv_subject_t* sub = jlp::registry().get_or_create(
+        "electrical.switches.bank.0.0.state", jlp::SubjectKind::Int);
+
+    lv_obj_t* lbl = lv_label_create(parent);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0xe6edf3), LV_PART_MAIN);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_label_set_text(lbl, "bank 0.0");
+    lv_obj_set_pos(lbl, 20, 20);
+
+    lv_obj_t* sw = lv_switch_create(parent);
+    lv_obj_set_pos(sw, 20, 50);
+    lv_obj_set_size(sw, 80, 40);
+
+    lv_subject_add_observer_obj(
+        sub,
+        [](lv_observer_t* obs, lv_subject_t* s) {
+          auto* w = lv_observer_get_target_obj(obs);
+          if (lv_subject_get_int(s)) lv_obj_add_state(w, LV_STATE_CHECKED);
+          else                       lv_obj_remove_state(w, LV_STATE_CHECKED);
+        },
+        sw, nullptr);
+  }
+
+  // --- Label: environment.depth.belowTransducer (m) ---
+  {
+    lv_subject_t* sub = jlp::registry().get_or_create(
+        "environment.depth.belowTransducer", jlp::SubjectKind::Float);
+
+    lv_obj_t* cap = lv_label_create(parent);
+    lv_obj_set_style_text_color(cap, lv_color_hex(0x8b949e), LV_PART_MAIN);
+    lv_obj_set_style_text_font(cap, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_label_set_text(cap, "depth");
+    lv_obj_set_pos(cap, 200, 20);
+
+    lv_obj_t* val = lv_label_create(parent);
+    lv_obj_set_style_text_color(val, lv_color_hex(0xe6edf3), LV_PART_MAIN);
+    lv_obj_set_style_text_font(val, &lv_font_montserrat_28, LV_PART_MAIN);
+    lv_label_set_text(val, "-.- m");
+    lv_obj_set_pos(val, 200, 40);
+
+    lv_subject_add_observer_obj(
+        sub,
+        [](lv_observer_t* obs, lv_subject_t* s) {
+          auto* w = lv_observer_get_target_obj(obs);
+          float v = lv_subject_get_float(s);
+          lv_label_set_text_fmt(w, "%.1f m", v);
+        },
+        val, nullptr);
+  }
+}
+
+}  // namespace
 
 void setup() {
   SetupLogging(ESP_LOG_INFO);
@@ -35,6 +96,7 @@ void setup() {
   lvgl_init(display, touch);
   jlp::overlay().init();
   jlp::overlay().set_hostname("p4-cockpit");
+  build_demo_layout(jlp::overlay().content_root());
 
   SensESPAppBuilder builder;
   auto app = builder.set_hostname("p4-cockpit")
