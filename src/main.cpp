@@ -1,10 +1,8 @@
 /**
  * ESP32-P4 Cockpit — JSON Layout Player (jlp)
  *
- * Step 1 skeleton: HAL up, single hardcoded LVGL label, all the
- * existing infra (WiFi, OTA, remote log, N2K gateway, watchdog).
- * Compile-time switch/gauge wiring is gone. Subsequent steps add the
- * subject registry, JSON parser, POST /layout endpoint, etc.
+ * Step 2: status overlay added. The overlay is the only always-on UI
+ * element; future layout swaps reparent under overlay().content_root().
  */
 
 #include <Arduino.h>
@@ -21,24 +19,13 @@
 #include "sensesp_cockpit_display/net/remote_log.h"
 #include "sensesp_n2k_gateway.h"
 #include "sensesp_app_builder.h"
+#include "sensesp/signalk/signalk_ws_client.h"
+#include "sensesp/system/lambda_consumer.h"
+
+#include "jlp/status_overlay.h"
 
 using namespace sensesp;
 using namespace sensesp_cockpit_display;
-
-static lv_obj_t* g_boot_label = nullptr;
-
-static void build_boot_screen() {
-  lv_obj_t* scr = lv_screen_active();
-  lv_obj_set_style_bg_color(scr, lv_color_hex(0x0d1117), LV_PART_MAIN);
-
-  g_boot_label = lv_label_create(scr);
-  lv_obj_set_style_text_color(g_boot_label, lv_color_hex(0xe6edf3),
-                              LV_PART_MAIN);
-  lv_obj_set_style_text_font(g_boot_label, &lv_font_montserrat_28,
-                             LV_PART_MAIN);
-  lv_label_set_text(g_boot_label, "jlp boot");
-  lv_obj_center(g_boot_label);
-}
 
 void setup() {
   SetupLogging(ESP_LOG_INFO);
@@ -46,7 +33,8 @@ void setup() {
   auto* display = new Waveshare7BDisplay();
   auto* touch = new Waveshare7BTouch();
   lvgl_init(display, touch);
-  build_boot_screen();
+  jlp::overlay().init();
+  jlp::overlay().set_hostname("p4-cockpit");
 
   SensESPAppBuilder builder;
   auto app = builder.set_hostname("p4-cockpit")
@@ -57,6 +45,27 @@ void setup() {
 
   remote_log_start(2323);
   http_ota_start(8080);
+
+  // --- SK WS state into the overlay ---
+  auto ws_client = app->get_ws_client();
+  ws_client->connect_to(new LambdaConsumer<SKWSConnectionState>(
+      [](SKWSConnectionState state) {
+        switch (state) {
+          case SKWSConnectionState::kSKWSConnected:
+            jlp::overlay().set_sk("ok");
+            break;
+          case SKWSConnectionState::kSKWSConnecting:
+            jlp::overlay().set_sk("connecting");
+            break;
+          case SKWSConnectionState::kSKWSAuthorizing:
+            jlp::overlay().set_sk("auth");
+            break;
+          case SKWSConnectionState::kSKWSDisconnected:
+          default:
+            jlp::overlay().set_sk("down");
+            break;
+        }
+      }));
 
   // --- N2K gateway (unchanged from cockpit firmware) ---
   auto* receiver =
@@ -108,6 +117,25 @@ void setup() {
   });
 
   event_loop()->onRepeat(33, []() { lvgl_tick(); });
+
+  // 1s status tick: WiFi / N2K / uptime / heap into the overlay.
+  event_loop()->onRepeat(1000, [receiver, n2k_server]() {
+    if (WiFi.status() == WL_CONNECTED) {
+      char buf[40];
+      snprintf(buf, sizeof(buf), "%s %ddBm", WiFi.SSID().c_str(),
+               WiFi.RSSI());
+      jlp::overlay().set_wifi(buf);
+    } else {
+      jlp::overlay().set_wifi("down");
+    }
+
+    int64_t rx_idle =
+        receiver->ever_received() ? receiver->seconds_since_last_rx() : -1;
+    jlp::overlay().set_n2k(rx_idle, n2k_server->connected_clients());
+
+    jlp::overlay().set_uptime_heap(millis() / 1000,
+                                   esp_get_free_heap_size());
+  });
 
   event_loop()->onRepeat(5000, [receiver, n2k_server]() {
     int64_t rx_idle = receiver->seconds_since_last_rx();
