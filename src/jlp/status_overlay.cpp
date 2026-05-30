@@ -85,6 +85,21 @@ void StatusOverlay::set_uptime_heap(uint32_t uptime_s, uint32_t free_heap) {
                         (unsigned)(free_heap / 1024));
 }
 
+void StatusOverlay::set_visible(bool visible) {
+  if (visible == visible_) return;
+  visible_ = visible;
+  if (!strip_ || !content_root_) return;
+  if (visible) {
+    lv_obj_clear_flag(strip_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_size(content_root_, LV_HOR_RES, LV_VER_RES - kStripHeight);
+    lv_obj_align(content_root_, LV_ALIGN_TOP_MID, 0, kStripHeight);
+  } else {
+    lv_obj_add_flag(strip_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_size(content_root_, LV_HOR_RES, LV_VER_RES);
+    lv_obj_align(content_root_, LV_ALIGN_TOP_MID, 0, 0);
+  }
+}
+
 StatusOverlay& overlay() {
   static StatusOverlay s;
   return s;

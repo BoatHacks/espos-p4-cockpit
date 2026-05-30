@@ -22,6 +22,12 @@ class StatusOverlay {
 
   lv_obj_t* content_root() { return content_root_; }
 
+  // Show or hide the strip. When hidden, content_root() expands to
+  // fill the full screen. Re-show restores the strip and shrinks
+  // content_root by kStripHeight from the top.
+  void set_visible(bool visible);
+  bool is_visible() const { return visible_; }
+
  private:
   lv_obj_t* strip_ = nullptr;
   lv_obj_t* content_root_ = nullptr;
@@ -30,6 +36,7 @@ class StatusOverlay {
   lv_obj_t* lbl_sk_ = nullptr;
   lv_obj_t* lbl_n2k_ = nullptr;
   lv_obj_t* lbl_sys_ = nullptr;
+  bool visible_ = true;
 };
 
 StatusOverlay& overlay();

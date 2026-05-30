@@ -5,6 +5,7 @@
 #include <unordered_set>
 #include "esp_log.h"
 
+#include "../status_overlay.h"
 #include "../subject_registry.h"
 #include "../widgets/widget_factory.h"
 #include "store.h"
@@ -140,6 +141,16 @@ ApplyResult LayoutManager::apply(const std::string& json, ApplySource src) {
     lv_obj_delete(staging);
     return r;
   }
+
+  // Apply status_overlay flag before the swap. Default true (matches
+  // the original always-on behavior — existing layouts unchanged).
+  // Toggling resizes content_root, so the staging tree needs to be
+  // re-parented after the resize to inherit the new geometry.
+  bool overlay_visible = true;
+  if (doc["status_overlay"].is<bool>()) {
+    overlay_visible = doc["status_overlay"];
+  }
+  overlay().set_visible(overlay_visible);
 
   lv_obj_t* old_root = current_root_;
   lv_obj_clear_flag(staging, LV_OBJ_FLAG_HIDDEN);
