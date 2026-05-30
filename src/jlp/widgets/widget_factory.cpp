@@ -214,8 +214,15 @@ lv_obj_t* build_arc(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   lv_obj_set_style_pad_all(root, 0, LV_PART_MAIN);
   lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 
+  // Arcs are circular: take min(w,h) so they stay round regardless of
+  // the user's bounding box. Extra width/height becomes empty space
+  // around the arc (caption + value still center on root, which lines
+  // them up inside the squared arc since the arc is centered too).
+  int box_w = spec["w"] | 120;
+  int box_h = spec["h"] | 60;
+  int side = box_w < box_h ? box_w : box_h;
   lv_obj_t* arc = lv_arc_create(root);
-  lv_obj_set_size(arc, lv_pct(100), lv_pct(100));
+  lv_obj_set_size(arc, side, side);
   lv_obj_align(arc, LV_ALIGN_CENTER, 0, 0);
   lv_arc_set_range(arc, 0, kBarSteps);
   int sa = spec["start_angle"] | 135;
