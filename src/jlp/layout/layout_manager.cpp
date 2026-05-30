@@ -144,9 +144,11 @@ ApplyResult LayoutManager::apply(const std::string& json, ApplySource src) {
   if (src == ApplySource::PostLayout) {
     store_write_atomic(json);
   }
+
+  active_name_ = doc["name"] | "(unnamed)";
+  active_source_ = src;
   r.ok = true;
-  const char* name = doc["name"] | "(unnamed)";
-  r.name = name;
+  r.name = active_name_;
   r.screens = screens.size();
   ESP_LOGI(TAG, "applied layout '%s' (src=%d screens=%u widgets=%u paths=%u)",
            r.name.c_str(), (int)src, r.screens, r.widgets,

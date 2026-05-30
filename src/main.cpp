@@ -27,6 +27,7 @@
 #include "jlp/layout/layout_manager.h"
 #include "jlp/layout/store.h"
 #include "jlp/net/http_api.h"
+#include "jlp/net/mdns_announce.h"
 #include "jlp/status_overlay.h"
 #include "jlp/subject_registry.h"
 
@@ -72,6 +73,7 @@ void setup() {
   remote_log_start(2323);
   http_ota_start(8080);
   jlp::http_api_start(8081);
+  jlp::mdns_announce_start(8081);
 
   // --- SK WS state into the overlay ---
   auto ws_client = app->get_ws_client();
