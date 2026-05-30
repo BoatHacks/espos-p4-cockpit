@@ -1,5 +1,6 @@
 #include "widget_factory.h"
 
+#include "../net/sk_put.h"
 #include "../subject_registry.h"
 
 namespace jlp {
@@ -121,7 +122,25 @@ lv_obj_t* build_toggle(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
       },
       sw, nullptr);
 
-  // Step 7 will add the click → PUT path.
+  // Click → send PUT with the opposite of what's currently displayed.
+  // No optimistic state mutation: we wait for the server echo.
+  auto* path_owned = new std::string(path);
+  lv_obj_add_event_cb(
+      sw,
+      [](lv_event_t* e) {
+        auto* p = static_cast<std::string*>(lv_event_get_user_data(e));
+        auto* w = static_cast<lv_obj_t*>(lv_event_get_target(e));
+        bool now_on = lv_obj_has_state(w, LV_STATE_CHECKED);
+        put_bool(*p, !now_on);
+      },
+      LV_EVENT_CLICKED, path_owned);
+  lv_obj_add_event_cb(
+      sw,
+      [](lv_event_t* e) {
+        delete static_cast<std::string*>(lv_event_get_user_data(e));
+      },
+      LV_EVENT_DELETE, path_owned);
+
   return root;
 }
 
