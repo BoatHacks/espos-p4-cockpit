@@ -59,30 +59,62 @@ bool store_read(std::string* out) {
   return true;
 }
 
-bool store_write_atomic(const std::string& json) {
-  if (!g_mounted) return false;
+// One write attempt: tmp + rename. Returns true on success, errno
+// describes the failure path on false.
+static bool try_write_atomic(const std::string& json) {
   FILE* f = fopen(kTmpPath, "wb");
   if (!f) {
-    ESP_LOGE(TAG, "open tmp failed: %s", strerror(errno));
+    ESP_LOGW(TAG, "open tmp failed: %s", strerror(errno));
     return false;
   }
   size_t n = fwrite(json.data(), 1, json.size(), f);
   bool ok = (n == json.size());
   if (fclose(f) != 0) ok = false;
   if (!ok) {
-    ESP_LOGE(TAG, "write %s failed (%u/%u)", kTmpPath, (unsigned)n,
+    ESP_LOGW(TAG, "write %s failed (%u/%u)", kTmpPath, (unsigned)n,
              (unsigned)json.size());
     remove(kTmpPath);
     return false;
   }
   if (rename(kTmpPath, kPath) != 0) {
-    ESP_LOGE(TAG, "rename %s -> %s failed: %s", kTmpPath, kPath,
+    ESP_LOGW(TAG, "rename %s -> %s failed: %s", kTmpPath, kPath,
              strerror(errno));
     remove(kTmpPath);
     return false;
   }
-  ESP_LOGI(TAG, "persisted layout (%u bytes)", (unsigned)json.size());
   return true;
+}
+
+bool store_write_atomic(const std::string& json) {
+  if (!g_mounted) return false;
+  if (try_write_atomic(json)) {
+    ESP_LOGI(TAG, "persisted layout (%u bytes)", (unsigned)json.size());
+    return true;
+  }
+  // LittleFS can land in a corrupted-dir-pair state where individual
+  // writes fail but the mount stays "successful". Reformat and retry
+  // once. Losing the partition contents is fine — the only data on it
+  // is the layout we're about to (re)write.
+  ESP_LOGW(TAG, "write failed; attempting littlefs reformat + retry");
+  esp_vfs_littlefs_unregister(kPartitionLabel);
+  g_mounted = false;
+  if (esp_littlefs_format(kPartitionLabel) != ESP_OK) {
+    ESP_LOGE(TAG, "littlefs format failed");
+    // Re-mount whatever state we can; further writes may still fail.
+    store_init();
+    return false;
+  }
+  if (!store_init()) {
+    ESP_LOGE(TAG, "remount after format failed");
+    return false;
+  }
+  if (try_write_atomic(json)) {
+    ESP_LOGI(TAG, "persisted layout after reformat (%u bytes)",
+             (unsigned)json.size());
+    return true;
+  }
+  ESP_LOGE(TAG, "persist still failing after reformat");
+  return false;
 }
 
 }  // namespace jlp

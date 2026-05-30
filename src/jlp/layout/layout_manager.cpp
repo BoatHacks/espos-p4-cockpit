@@ -142,7 +142,9 @@ ApplyResult LayoutManager::apply(const std::string& json, ApplySource src) {
   // Persist only after a successful swap, and only for pushed layouts
   // (boot paths re-read the same persisted blob).
   if (src == ApplySource::PostLayout) {
-    store_write_atomic(json);
+    if (!store_write_atomic(json)) {
+      r.warning = "layout rendered but not persisted";
+    }
   }
 
   active_name_ = doc["name"] | "(unnamed)";

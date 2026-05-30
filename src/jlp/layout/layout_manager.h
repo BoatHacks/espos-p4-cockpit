@@ -10,9 +10,10 @@ enum class ApplySource { Boot, BootStore, BootDefault, PostLayout, BootFetched }
 struct ApplyResult {
   bool ok;
   std::string err;
-  std::string name;  // root "name" field on success
+  std::string name;       // root "name" field on success
   unsigned screens;
   unsigned widgets;
+  std::string warning;    // non-fatal note, e.g. persistence failed
 };
 
 class LayoutManager {

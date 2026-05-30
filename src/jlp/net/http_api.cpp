@@ -78,10 +78,18 @@ esp_err_t layout_post(httpd_req_t* req) {
     return ESP_OK;
   }
 
-  char buf[256];
-  snprintf(buf, sizeof(buf),
-           "{\"ok\":true,\"name\":\"%s\",\"screens\":%u,\"widgets\":%u}",
-           result->name.c_str(), result->screens, result->widgets);
+  char buf[384];
+  if (!result->warning.empty()) {
+    snprintf(buf, sizeof(buf),
+             "{\"ok\":true,\"name\":\"%s\",\"screens\":%u,\"widgets\":%u,"
+             "\"warning\":\"%s\"}",
+             result->name.c_str(), result->screens, result->widgets,
+             result->warning.c_str());
+  } else {
+    snprintf(buf, sizeof(buf),
+             "{\"ok\":true,\"name\":\"%s\",\"screens\":%u,\"widgets\":%u}",
+             result->name.c_str(), result->screens, result->widgets);
+  }
   httpd_resp_sendstr(req, buf);
   return ESP_OK;
 }
