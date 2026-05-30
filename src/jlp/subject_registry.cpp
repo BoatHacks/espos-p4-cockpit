@@ -4,6 +4,7 @@
 #include "esp_log.h"
 #include "sensesp/signalk/signalk_value_listener.h"
 #include "sensesp/system/lambda_consumer.h"
+#include "zone_registry.h"
 
 static const char* TAG = "jlp.reg";
 
@@ -91,6 +92,12 @@ lv_subject_t* SubjectRegistry::get_or_create(const std::string& path,
   lv_subject_t* sub = &slot.entry->subject;
   map_.emplace(path, std::move(slot));
   ESP_LOGI(TAG, "created subject for %s (kind=%d)", path.c_str(), (int)kind);
+
+  // Also kick off a zone-metadata fetch for this path. No-op if SK
+  // server isn't reachable; zones simply stay unset and widgets keep
+  // their default accent color.
+  zones().fetch_async(path);
+
   return sub;
 }
 

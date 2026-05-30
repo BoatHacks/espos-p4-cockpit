@@ -2,6 +2,7 @@
 
 #include "../net/sk_put.h"
 #include "../subject_registry.h"
+#include "../zone_registry.h"
 
 namespace jlp {
 
@@ -18,10 +19,11 @@ struct Disp {
   float offset;
   int decimals;
   char unit[12];
+  char path[80];  // bind path, for zone lookups in observers
 };
 
 Disp parse_display(JsonObjectConst spec) {
-  Disp d{1.f, 0.f, 1, ""};
+  Disp d{1.f, 0.f, 1, "", ""};
   JsonObjectConst display = spec["display"];
   if (!display.isNull()) {
     d.scale = display["scale"] | 1.f;
@@ -29,12 +31,21 @@ Disp parse_display(JsonObjectConst spec) {
     d.decimals = display["decimals"] | 1;
     snprintf(d.unit, sizeof(d.unit), "%s", display["unit"] | "");
   }
+  snprintf(d.path, sizeof(d.path), "%s", spec["bind"] | "");
   return d;
 }
 
 void apply_geometry(lv_obj_t* obj, JsonObjectConst spec) {
   lv_obj_set_pos(obj, spec["x"] | 0, spec["y"] | 0);
   lv_obj_set_size(obj, spec["w"] | 120, spec["h"] | 60);
+}
+
+// Returns the zone-coded color for `display_value` on `path`, or
+// `fallback` if the path has no zones or value is outside all zones.
+uint32_t zone_color(const char* path, float display_value, uint32_t fallback) {
+  if (!path || !*path) return fallback;
+  const Zone* z = zones().match(path, display_value);
+  return z ? color_for_state(z->state) : fallback;
 }
 
 // Map a display-space value into [0, kBarSteps] for LVGL.
@@ -116,6 +127,8 @@ lv_obj_t* build_label(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
         auto* d = static_cast<Disp*>(lv_obj_get_user_data(w));
         float v = lv_subject_get_float(s) * d->scale + d->offset;
         lv_label_set_text_fmt(w, "%.*f %s", d->decimals, v, d->unit);
+        uint32_t c = zone_color(d->path, v, kFgHex);
+        lv_obj_set_style_text_color(w, lv_color_hex(c), LV_PART_MAIN);
       },
       val, nullptr);
 
@@ -163,6 +176,28 @@ lv_obj_t* build_toggle(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
         else                       lv_obj_remove_state(w, LV_STATE_CHECKED);
       },
       sw, nullptr);
+
+  // Tile background takes the zone color of the current int value, if
+  // the bound path has zones. No-op for typical bool switches.
+  auto* d_root = new Disp(parse_display(spec));
+  lv_obj_set_user_data(root, d_root);
+  lv_obj_add_event_cb(
+      root,
+      [](lv_event_t* e) {
+        delete static_cast<Disp*>(lv_obj_get_user_data(
+            static_cast<lv_obj_t*>(lv_event_get_target(e))));
+      },
+      LV_EVENT_DELETE, nullptr);
+  lv_subject_add_observer_obj(
+      sub,
+      [](lv_observer_t* obs, lv_subject_t* s) {
+        auto* w = lv_observer_get_target_obj(obs);
+        auto* d = static_cast<Disp*>(lv_obj_get_user_data(w));
+        float v = (float)lv_subject_get_int(s) * d->scale + d->offset;
+        uint32_t c = zone_color(d->path, v, 0x161b22);
+        lv_obj_set_style_bg_color(w, lv_color_hex(c), LV_PART_MAIN);
+      },
+      root, nullptr);
 
   // Click → send PUT with the opposite of what's currently displayed.
   // No optimistic state mutation: we wait for the server echo.
@@ -249,6 +284,8 @@ lv_obj_t* build_arc(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
         auto* rb = static_cast<RangeBinding*>(lv_obj_get_user_data(w));
         float v = lv_subject_get_float(s) * rb->display.scale + rb->display.offset;
         lv_arc_set_value(w, scale_to_steps(v, rb->min, rb->max));
+        uint32_t c = zone_color(rb->display.path, v, kAccentHex);
+        lv_obj_set_style_arc_color(w, lv_color_hex(c), LV_PART_INDICATOR);
       },
       arc, nullptr);
 
@@ -360,6 +397,8 @@ lv_obj_t* build_bar(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
         auto* rb = static_cast<RangeBinding*>(lv_obj_get_user_data(w));
         float v = lv_subject_get_float(s) * rb->display.scale + rb->display.offset;
         lv_bar_set_value(w, scale_to_steps(v, rb->min, rb->max), LV_ANIM_OFF);
+        uint32_t c = zone_color(rb->display.path, v, kAccentHex);
+        lv_obj_set_style_bg_color(w, lv_color_hex(c), LV_PART_INDICATOR);
       },
       bar, nullptr);
   lv_subject_add_observer_obj(
