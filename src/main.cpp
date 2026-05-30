@@ -68,7 +68,7 @@ void setup() {
   auto app = builder.set_hostname("p4-cockpit")
                  ->set_wifi_client("MOIN", "Moin2018!")
                  ->set_wifi_access_point("", "")
-                 ->set_sk_server("192.168.0.148", 3000)
+                 ->set_sk_server("192.168.0.148", 4100)
                  ->get_app();
 
   remote_log_start(2323);

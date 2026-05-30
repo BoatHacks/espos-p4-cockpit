@@ -194,6 +194,12 @@ struct RangeBinding {
 };
 
 // ---- arc ----
+//
+// Layout: a transparent container of the user's geometry holds the
+// arc widget (sized to fill, ignoring clicks) plus two child labels
+// for caption and value. The labels are siblings of the arc, not
+// children — `lv_arc` clips children to its arc shape which hides
+// any centered text.
 lv_obj_t* build_arc(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   const char* path = spec["bind"] | (const char*)nullptr;
   if (!path) { *err = "arc: bind required"; return nullptr; }
@@ -201,8 +207,16 @@ lv_obj_t* build_arc(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   if (!sub) { *err = std::string("kind conflict on ") + path; return nullptr; }
   ctx.live_paths.insert(path);
 
-  lv_obj_t* arc = lv_arc_create(ctx.parent);
-  apply_geometry(arc, spec);
+  lv_obj_t* root = lv_obj_create(ctx.parent);
+  apply_geometry(root, spec);
+  lv_obj_set_style_bg_opa(root, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_border_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(root, 0, LV_PART_MAIN);
+  lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* arc = lv_arc_create(root);
+  lv_obj_set_size(arc, lv_pct(100), lv_pct(100));
+  lv_obj_align(arc, LV_ALIGN_CENTER, 0, 0);
   lv_arc_set_range(arc, 0, kBarSteps);
   int sa = spec["start_angle"] | 135;
   int ea = spec["end_angle"] | 45;
@@ -221,7 +235,6 @@ lv_obj_t* build_arc(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
         static_cast<lv_obj_t*>(lv_event_get_target(e))));
   };
   lv_obj_add_event_cb(arc, free_rb, LV_EVENT_DELETE, nullptr);
-
   lv_subject_add_observer_obj(
       sub,
       [](lv_observer_t* obs, lv_subject_t* s) {
@@ -232,20 +245,22 @@ lv_obj_t* build_arc(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
       },
       arc, nullptr);
 
-  // Center caption + value label as children of the arc.
+  // Caption + value as siblings of the arc, both centered on root.
+  // Caption sits above the value when present.
   const char* caption = spec["label"] | (const char*)nullptr;
+  lv_obj_t* val = lv_label_create(root);
+  lv_obj_set_style_text_color(val, lv_color_hex(kFgHex), LV_PART_MAIN);
+  lv_obj_set_style_text_font(val, &lv_font_montserrat_28, LV_PART_MAIN);
+  lv_label_set_text(val, "—");
+  lv_obj_center(val);
   if (caption) {
-    lv_obj_t* cap = lv_label_create(arc);
+    lv_obj_t* cap = lv_label_create(root);
     lv_obj_set_style_text_color(cap, lv_color_hex(kMutedHex), LV_PART_MAIN);
     lv_obj_set_style_text_font(cap, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_label_set_text(cap, caption);
-    lv_obj_align(cap, LV_ALIGN_CENTER, 0, -18);
+    lv_obj_align_to(cap, val, LV_ALIGN_OUT_TOP_MID, 0, -2);
   }
-  lv_obj_t* val = lv_label_create(arc);
-  lv_obj_set_style_text_color(val, lv_color_hex(kFgHex), LV_PART_MAIN);
-  lv_obj_set_style_text_font(val, &lv_font_montserrat_28, LV_PART_MAIN);
-  lv_obj_align(val, LV_ALIGN_CENTER, 0, 8);
-  lv_label_set_text(val, "—");
+
   auto* rb_val = new RangeBinding(*rb_arc);
   lv_obj_set_user_data(val, rb_val);
   lv_obj_add_event_cb(val, free_rb, LV_EVENT_DELETE, nullptr);
@@ -260,7 +275,7 @@ lv_obj_t* build_arc(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
       },
       val, nullptr);
 
-  return arc;
+  return root;
 }
 
 // ---- bar ----
@@ -271,23 +286,24 @@ lv_obj_t* build_bar(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   if (!sub) { *err = std::string("kind conflict on ") + path; return nullptr; }
   ctx.live_paths.insert(path);
 
+  // Tile-style frame so the bar is identifiable as a widget even with
+  // no live value (when value is 0 the indicator doesn't draw; only
+  // the track shows). Caption + value text always visible.
   lv_obj_t* root = lv_obj_create(ctx.parent);
   apply_geometry(root, spec);
-  lv_obj_set_style_bg_opa(root, LV_OPA_TRANSP, LV_PART_MAIN);
-  lv_obj_set_style_border_width(root, 0, LV_PART_MAIN);
-  lv_obj_set_style_pad_all(root, 4, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(root, lv_color_hex(0x161b22), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(root, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_border_color(root, lv_color_hex(0x30363d), LV_PART_MAIN);
+  lv_obj_set_style_border_width(root, 1, LV_PART_MAIN);
+  lv_obj_set_style_radius(root, 6, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(root, 8, LV_PART_MAIN);
   lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 
   bool vertical = spec["vertical"] | false;
-  lv_obj_t* bar = lv_bar_create(root);
-  lv_bar_set_range(bar, 0, kBarSteps);
-  lv_obj_set_style_bg_color(bar, lv_color_hex(0x21262d), LV_PART_MAIN);
-  lv_obj_set_style_bg_color(bar, lv_color_hex(kAccentHex), LV_PART_INDICATOR);
 
   const char* caption = spec["label"] | (const char*)nullptr;
-  lv_obj_t* cap = nullptr;
   if (caption) {
-    cap = lv_label_create(root);
+    lv_obj_t* cap = lv_label_create(root);
     lv_obj_set_style_text_color(cap, lv_color_hex(kMutedHex), LV_PART_MAIN);
     lv_obj_set_style_text_font(cap, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_label_set_text(cap, caption);
@@ -301,11 +317,18 @@ lv_obj_t* build_bar(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   lv_obj_align(val, LV_ALIGN_TOP_RIGHT, 0, 0);
 
   // Bar takes the rest of the box.
+  lv_obj_t* bar = lv_bar_create(root);
+  lv_bar_set_range(bar, 0, kBarSteps);
+  // Track: medium grey, clearly visible against tile bg.
+  lv_obj_set_style_bg_color(bar, lv_color_hex(0x30363d), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(bar, lv_color_hex(kAccentHex), LV_PART_INDICATOR);
+  lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
   if (vertical) {
-    lv_obj_set_size(bar, 16, lv_pct(70));
+    lv_obj_set_size(bar, 24, lv_pct(75));
     lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, 0, 0);
   } else {
-    lv_obj_set_size(bar, lv_pct(100), 16);
+    lv_obj_set_size(bar, lv_pct(100), 24);
     lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, 0, 0);
   }
 
