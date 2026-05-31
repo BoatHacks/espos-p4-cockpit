@@ -38,7 +38,7 @@ uint32_t color_for_state(ZoneState s) {
 }
 
 const Zone* ZoneRegistry::match(const std::string& path,
-                                float display_value) const {
+                                float raw_value) const {
   auto it = map_.find(path);
   if (it == map_.end()) return nullptr;
   for (const Zone& z : it->second) {
@@ -47,8 +47,8 @@ const Zone* ZoneRegistry::match(const std::string& path,
     // paths like a switch position — alert at 0, nominal at 1) match
     // nothing. Treat that case as equality on the point instead.
     if (z.lower == z.upper) {
-      if (display_value == z.lower) return &z;
-    } else if (display_value >= z.lower && display_value < z.upper) {
+      if (raw_value == z.lower) return &z;
+    } else if (raw_value >= z.lower && raw_value < z.upper) {
       return &z;
     }
   }

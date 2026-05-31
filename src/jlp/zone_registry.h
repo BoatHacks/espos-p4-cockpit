@@ -19,7 +19,10 @@ enum class ZoneState : uint8_t {
 };
 
 struct Zone {
-  float lower;     // display-space (apply widget scale+offset first)
+  // SK metadata zones are in RAW units (same space as the path's
+  // value before display scale+offset is applied). Match() expects
+  // the raw value, not the display-formatted one.
+  float lower;
   float upper;
   ZoneState state;
 };
@@ -34,9 +37,11 @@ class ZoneRegistry {
   // Wire into the SK WS client's meta callback at boot. Idempotent.
   void hook_sk_ws();
 
-  // Returns the zone matching `display_value` for `path`, or nullptr
-  // if no zones for this path or value falls outside all zones.
-  const Zone* match(const std::string& path, float display_value) const;
+  // Returns the zone matching `raw_value` for `path`, or nullptr if
+  // no zones for this path or value falls outside all zones.
+  // `raw_value` is the SK delta value BEFORE any widget display
+  // scale/offset is applied (SK zones live in raw units).
+  const Zone* match(const std::string& path, float raw_value) const;
 
   // Returns the path's SK meta `description` if one was published, or
   // empty string. Used by widgets that want to show the human-readable

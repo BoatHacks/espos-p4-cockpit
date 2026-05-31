@@ -140,7 +140,8 @@ lv_obj_t* build_label(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
       [](lv_observer_t* obs, lv_subject_t* s) {
         auto* w = lv_observer_get_target_obj(obs);
         auto* lc = static_cast<LabelCtx*>(lv_obj_get_user_data(w));
-        float v = lv_subject_get_float(s) * lc->d.scale + lc->d.offset;
+        float raw = lv_subject_get_float(s);
+        float v = raw * lc->d.scale + lc->d.offset;
         // Prefer the SK meta description over the formatted value.
         const std::string& desc = zones().description(lc->d.path);
         if (!desc.empty()) {
@@ -148,7 +149,9 @@ lv_obj_t* build_label(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
         } else {
           lv_label_set_text_fmt(w, "%.*f %s", lc->d.decimals, v, lc->d.unit);
         }
-        uint32_t bg = zone_color(lc->d.path, v, 0x161b22);
+        // Zones are in raw SK units (e.g. ratio 0..1 for SOC); match
+        // against raw, not the display-scaled value.
+        uint32_t bg = zone_color(lc->d.path, raw, 0x161b22);
         lv_obj_set_style_bg_color(lc->tile, lv_color_hex(bg), LV_PART_MAIN);
       },
       val, nullptr);
@@ -226,8 +229,9 @@ lv_obj_t* build_toggle(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
       [](lv_observer_t* obs, lv_subject_t* s) {
         auto* w = lv_observer_get_target_obj(obs);
         auto* d = static_cast<Disp*>(lv_obj_get_user_data(w));
-        float v = (float)lv_subject_get_int(s) * d->scale + d->offset;
-        uint32_t c = zone_color(d->path, v, 0x161b22);
+        int32_t raw = lv_subject_get_int(s);
+        // Zones live in raw SK units; match against raw, not display.
+        uint32_t c = zone_color(d->path, (float)raw, 0x161b22);
         lv_obj_set_style_bg_color(w, lv_color_hex(c), LV_PART_MAIN);
       },
       root, nullptr);
@@ -347,9 +351,11 @@ lv_obj_t* build_arc(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
       [](lv_observer_t* obs, lv_subject_t* s) {
         auto* w = lv_observer_get_target_obj(obs);
         auto* rb = static_cast<RangeBinding*>(lv_obj_get_user_data(w));
-        float v = lv_subject_get_float(s) * rb->display.scale + rb->display.offset;
+        float raw = lv_subject_get_float(s);
+        float v = raw * rb->display.scale + rb->display.offset;
         lv_arc_set_value(w, scale_to_steps(v, rb->min, rb->max));
-        uint32_t c = zone_color(rb->display.path, v, kAccentHex);
+        // Zones live in raw SK units; match against raw, not display.
+        uint32_t c = zone_color(rb->display.path, raw, kAccentHex);
         lv_obj_set_style_arc_color(w, lv_color_hex(c), LV_PART_INDICATOR);
       },
       arc, nullptr);
@@ -463,9 +469,11 @@ lv_obj_t* build_bar(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
       [](lv_observer_t* obs, lv_subject_t* s) {
         auto* w = lv_observer_get_target_obj(obs);
         auto* rb = static_cast<RangeBinding*>(lv_obj_get_user_data(w));
-        float v = lv_subject_get_float(s) * rb->display.scale + rb->display.offset;
+        float raw = lv_subject_get_float(s);
+        float v = raw * rb->display.scale + rb->display.offset;
         lv_bar_set_value(w, scale_to_steps(v, rb->min, rb->max), LV_ANIM_OFF);
-        uint32_t c = zone_color(rb->display.path, v, kAccentHex);
+        // Zones live in raw SK units; match against raw, not display.
+        uint32_t c = zone_color(rb->display.path, raw, kAccentHex);
         lv_obj_set_style_bg_color(w, lv_color_hex(c), LV_PART_INDICATOR);
       },
       bar, nullptr);
