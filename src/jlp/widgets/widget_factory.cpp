@@ -88,6 +88,9 @@ lv_obj_t* build_label(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   apply_geometry(root, spec);
   lv_obj_set_style_bg_opa(root, LV_OPA_TRANSP, LV_PART_MAIN);
   lv_obj_set_style_border_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_outline_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_outline_pad(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_shadow_width(root, 0, LV_PART_MAIN);
   lv_obj_set_style_radius(root, 0, LV_PART_MAIN);
   lv_obj_set_style_pad_all(root, 4, LV_PART_MAIN);
   lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
@@ -152,6 +155,14 @@ lv_obj_t* build_toggle(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   apply_geometry(root, spec);
   lv_obj_set_style_bg_color(root, lv_color_hex(0x161b22), LV_PART_MAIN);
   lv_obj_set_style_border_width(root, 0, LV_PART_MAIN);
+  // LVGL default theme adds a 1-2 px outline + a soft shadow around
+  // every lv_obj. Both extend past the geometric bounding box and
+  // make tightly-spaced tiles look loose on the device (designer
+  // doesn't replicate them). Zero both so the visible tile matches
+  // the JSON (x,y,w,h) 1:1.
+  lv_obj_set_style_outline_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_outline_pad(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_shadow_width(root, 0, LV_PART_MAIN);
   lv_obj_set_style_radius(root, 6, LV_PART_MAIN);
   lv_obj_set_style_pad_all(root, 8, LV_PART_MAIN);
   lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
@@ -250,6 +261,9 @@ lv_obj_t* build_arc(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   apply_geometry(root, spec);
   lv_obj_set_style_bg_opa(root, LV_OPA_TRANSP, LV_PART_MAIN);
   lv_obj_set_style_border_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_outline_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_outline_pad(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_shadow_width(root, 0, LV_PART_MAIN);
   lv_obj_set_style_pad_all(root, 0, LV_PART_MAIN);
   lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -343,6 +357,9 @@ lv_obj_t* build_bar(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   lv_obj_set_style_bg_opa(root, LV_OPA_COVER, LV_PART_MAIN);
   lv_obj_set_style_border_color(root, lv_color_hex(0x30363d), LV_PART_MAIN);
   lv_obj_set_style_border_width(root, 1, LV_PART_MAIN);
+  lv_obj_set_style_outline_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_outline_pad(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_shadow_width(root, 0, LV_PART_MAIN);
   lv_obj_set_style_radius(root, 6, LV_PART_MAIN);
   lv_obj_set_style_pad_all(root, 8, LV_PART_MAIN);
   lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
