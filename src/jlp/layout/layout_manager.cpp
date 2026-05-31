@@ -167,13 +167,28 @@ ApplyResult LayoutManager::apply(const std::string& json, ApplySource src) {
 
   active_name_ = doc["name"] | "(unnamed)";
   active_source_ = src;
-  if (post_swap_) post_swap_();
+
+  // Compare against the previously-known path set so the post-swap
+  // hook can decide whether to restart the WS (needed only if the
+  // new layout introduced paths SK isn't currently subscribed to).
+  bool new_paths = false;
+  for (const auto& p : live_paths) {
+    if (known_paths_.find(p) == known_paths_.end()) {
+      new_paths = true;
+      break;
+    }
+  }
+  known_paths_ = live_paths;
+  if (post_swap_) post_swap_(new_paths);
+
   r.ok = true;
   r.name = active_name_;
   r.screens = screens.size();
-  ESP_LOGI(TAG, "applied layout '%s' (src=%d screens=%u widgets=%u paths=%u)",
+  ESP_LOGI(TAG,
+           "applied layout '%s' (src=%d screens=%u widgets=%u paths=%u "
+           "new=%d)",
            r.name.c_str(), (int)src, r.screens, r.widgets,
-           (unsigned)live_paths.size());
+           (unsigned)live_paths.size(), new_paths ? 1 : 0);
   return r;
 }
 

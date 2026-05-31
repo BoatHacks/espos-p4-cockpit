@@ -2,6 +2,7 @@
 
 #include "lvgl.h"
 #include <functional>
+#include <set>
 #include <string>
 
 namespace jlp {
@@ -22,12 +23,17 @@ class LayoutManager {
   // `parent` is where the screens/tabview goes. Set once at boot.
   void init(lv_obj_t* parent);
 
-  // Called after every successful layout swap. Used to force a WS
-  // reconnect so SensESP re-sends its subscribe message including any
-  // listeners newly created for the just-applied layout. (SensESP
-  // only subscribes once at on_connected; new listeners added later
-  // are silently ignored until reconnect.)
-  using PostSwapHook = std::function<void()>;
+  // Called after every successful layout swap. The bool argument is
+  // true iff the new layout introduced bound paths that weren't in
+  // the previous layout — caller can use it to decide whether a WS
+  // reconnect (and the brief visible flicker) is worth it.
+  //
+  // (SensESP only subscribes listeners once at on_connected; new
+  // listeners added later are silently ignored until reconnect.
+  // So a push that introduces new paths needs a WS restart for those
+  // values to flow; a push that only rearranges existing widgets
+  // doesn't.)
+  using PostSwapHook = std::function<void(bool new_paths_introduced)>;
   void set_post_swap_hook(PostSwapHook h) { post_swap_ = std::move(h); }
 
   // Parses, validates, builds, and (on success) swaps in the new
@@ -43,6 +49,10 @@ class LayoutManager {
   std::string active_name_;
   ApplySource active_source_ = ApplySource::Boot;
   PostSwapHook post_swap_;
+  // Paths the currently-applied layout binds. Used to detect whether
+  // the next swap introduces brand-new paths (which would require a
+  // SK WS reconnect for the subscription to include them).
+  std::set<std::string> known_paths_;
 };
 
 LayoutManager& layout_manager();

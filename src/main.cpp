@@ -72,15 +72,17 @@ void setup() {
                  ->set_sk_server("192.168.0.148", 4100)
                  ->get_app();
 
-  // After every layout swap, restart the SK WS so SensESP re-sends
-  // its subscribe message with the now-extended listener set.
-  // SensESP only subscribes once at on_connected; listeners created
-  // later (when a new layout binds new paths) are otherwise ignored
-  // by the server.
-  jlp::layout_manager().set_post_swap_hook([app]() {
-    auto ws = app->get_ws_client();
-    if (ws) ws->restart();
-  });
+  // After every layout swap, restart the SK WS only when the new
+  // layout introduced bound paths SensESP isn't already subscribed
+  // to. (SensESP subscribes once at on_connected; listeners added
+  // later are silently ignored until reconnect — so we only pay the
+  // reconnect cost when there's a real subscription gap.)
+  jlp::layout_manager().set_post_swap_hook(
+      [app](bool new_paths_introduced) {
+        if (!new_paths_introduced) return;
+        auto ws = app->get_ws_client();
+        if (ws) ws->restart();
+      });
 
   remote_log_start(2323);
   http_ota_start(8080);
