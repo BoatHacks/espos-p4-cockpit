@@ -86,7 +86,7 @@ void setup() {
   http_ota_start(8080);
   jlp::http_api_start(8081);
   jlp::mdns_announce_start(8081);
-  jlp::zones().set_sk_server("192.168.0.148", 4100);
+  jlp::zones().hook_sk_ws();
   jlp::layout_fetch_async_apply("192.168.0.148", 4100);
 
   // --- SK WS state into the overlay ---
