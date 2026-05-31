@@ -156,17 +156,21 @@ lv_obj_t* build_toggle(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   lv_obj_set_style_pad_all(root, 8, LV_PART_MAIN);
   lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 
+  // Inline layout: caption flushed left and vertically centered,
+  // switch flushed right and vertically centered. Switch takes a
+  // fixed comfortable touch size; caption fills the rest.
   const char* caption = spec["label"] | (const char*)nullptr;
   if (caption) {
     lv_obj_t* l = lv_label_create(root);
-    lv_obj_set_style_text_color(l, lv_color_hex(kMutedHex), LV_PART_MAIN);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(l, lv_color_hex(kFgHex), LV_PART_MAIN);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_20, LV_PART_MAIN);
     lv_label_set_text(l, caption);
-    lv_obj_align(l, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
   }
 
   lv_obj_t* sw = lv_switch_create(root);
-  lv_obj_align(sw, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+  lv_obj_set_size(sw, 60, 30);
+  lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
 
   lv_subject_add_observer_obj(
       sub,

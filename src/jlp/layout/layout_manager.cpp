@@ -19,9 +19,46 @@ namespace {
 constexpr int kSchemaVersion = 1;
 constexpr size_t kMaxJsonBytes = 64 * 1024;
 
-// Builds the screen(s) under `root`. Single screen for v1; tabview
-// added when len(screens) > 1.
-bool build_screens(lv_obj_t* root, JsonArrayConst screens,
+// Per-screen container + tab button colors.
+constexpr uint32_t kStripBgHex = 0x161b22;
+constexpr uint32_t kTabBgHex = 0x21262d;
+constexpr uint32_t kTabActiveBgHex = 0x58a6ff;
+constexpr uint32_t kTabFgHex = 0xe6edf3;
+constexpr uint32_t kTabActiveFgHex = 0x0d1117;
+
+struct ScreenSwitcherCtx {
+  std::vector<lv_obj_t*> screens;
+  std::vector<lv_obj_t*> tabs;
+  int active = 0;
+};
+
+// One per layout. Lives in heap, freed when the layout's root is
+// destroyed (event_cb on root).
+static void switcher_show(ScreenSwitcherCtx* ctx, int idx) {
+  if (idx < 0 || idx >= (int)ctx->screens.size()) return;
+  for (size_t i = 0; i < ctx->screens.size(); i++) {
+    if ((int)i == idx) lv_obj_clear_flag(ctx->screens[i], LV_OBJ_FLAG_HIDDEN);
+    else                lv_obj_add_flag(ctx->screens[i], LV_OBJ_FLAG_HIDDEN);
+  }
+  for (size_t i = 0; i < ctx->tabs.size(); i++) {
+    bool a = (int)i == idx;
+    lv_obj_set_style_bg_color(
+        ctx->tabs[i], lv_color_hex(a ? kTabActiveBgHex : kTabBgHex),
+        LV_PART_MAIN);
+    lv_obj_t* lbl = lv_obj_get_child(ctx->tabs[i], 0);
+    if (lbl) {
+      lv_obj_set_style_text_color(
+          lbl, lv_color_hex(a ? kTabActiveFgHex : kTabFgHex), LV_PART_MAIN);
+    }
+  }
+  ctx->active = idx;
+}
+
+// Builds the screen(s) under `root`. Single screen: widgets parented
+// directly to root. Multi-screen: each screen gets its own container
+// stacked top-to-top, only the active one is visible, and a bottom
+// strip of tab buttons switches between them.
+bool build_screens(lv_obj_t* root, JsonObjectConst doc, JsonArrayConst screens,
                    SubjectRegistry& reg, std::string* err,
                    std::set<std::string>* live_paths, unsigned* widget_count) {
   if (screens.size() == 0) { *err = "no screens"; return false; }
@@ -37,20 +74,95 @@ bool build_screens(lv_obj_t* root, JsonArrayConst screens,
     return true;
   }
 
-  // Multi-screen: tabview.
-  lv_obj_t* tv = lv_tabview_create(root);
-  lv_tabview_set_tab_bar_size(tv, 36);
-  lv_obj_set_size(tv, lv_pct(100), lv_pct(100));
+  // Multi-screen: stack of hidden containers + bottom tab strip.
+  const int strip_h = doc["tab_strip_height"] | 56;
+  auto* sctx = new ScreenSwitcherCtx();
+
+  // Free the switcher context when the layout root dies.
+  lv_obj_set_user_data(root, sctx);
+  lv_obj_add_event_cb(
+      root,
+      [](lv_event_t* e) {
+        delete static_cast<ScreenSwitcherCtx*>(lv_obj_get_user_data(
+            static_cast<lv_obj_t*>(lv_event_get_target(e))));
+      },
+      LV_EVENT_DELETE, nullptr);
+
+  // Tab strip pinned to the bottom of `root`.
+  lv_obj_t* strip = lv_obj_create(root);
+  lv_obj_set_size(strip, lv_pct(100), strip_h);
+  lv_obj_align(strip, LV_ALIGN_BOTTOM_MID, 0, 0);
+  lv_obj_set_style_bg_color(strip, lv_color_hex(kStripBgHex), LV_PART_MAIN);
+  lv_obj_set_style_border_width(strip, 0, LV_PART_MAIN);
+  lv_obj_set_style_radius(strip, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(strip, 4, LV_PART_MAIN);
+  lv_obj_set_style_pad_gap(strip, 4, LV_PART_MAIN);
+  lv_obj_set_flex_flow(strip, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(strip, LV_FLEX_ALIGN_SPACE_EVENLY,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_clear_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
+
+  // Per-screen container above the strip, all sharing the same area.
   for (JsonObjectConst s : screens) {
-    const char* title = s["title"] | "?";
-    lv_obj_t* tab = lv_tabview_add_tab(tv, title);
+    lv_obj_t* page = lv_obj_create(root);
+    lv_obj_set_size(page, lv_pct(100), LV_VER_RES - strip_h);
+    // Note: this is RELATIVE to `root` which is itself sized by the
+    // caller (and offset by the status overlay if enabled). LV_VER_RES
+    // minus strip_h gives a useful default that works when root fills
+    // content_root (the common case).
+    lv_obj_align(page, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_opa(page, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(page, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(page, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
+    sctx->screens.push_back(page);
+
     JsonArrayConst widgets = s["widgets"];
-    BuildCtx ctx{tab, reg, *live_paths};
+    BuildCtx ctx{page, reg, *live_paths};
     for (JsonObjectConst w : widgets) {
       if (!build_widget(ctx, w, err)) return false;
       ++*widget_count;
     }
   }
+
+  // Tab buttons (one per screen, flex-row equal widths).
+  for (size_t i = 0; i < screens.size(); i++) {
+    JsonObjectConst s = screens[i];
+    const char* title = s["title"] | (s["id"] | "?");
+
+    lv_obj_t* btn = lv_obj_create(strip);
+    lv_obj_set_flex_grow(btn, 1);
+    lv_obj_set_height(btn, lv_pct(100));
+    lv_obj_set_style_bg_color(btn, lv_color_hex(kTabBgHex), LV_PART_MAIN);
+    lv_obj_set_style_border_width(btn, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(btn, 4, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(btn, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, title);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(kTabFgHex), LV_PART_MAIN);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_center(lbl);
+
+    // Stash the screen index as a small int in user_data.
+    lv_obj_set_user_data(btn, (void*)(intptr_t)i);
+    lv_obj_add_event_cb(
+        btn,
+        [](lv_event_t* e) {
+          auto* w = static_cast<lv_obj_t*>(lv_event_get_target(e));
+          auto* parent_root = lv_obj_get_parent(lv_obj_get_parent(w));
+          auto* ctx =
+              static_cast<ScreenSwitcherCtx*>(lv_obj_get_user_data(parent_root));
+          int idx = (int)(intptr_t)lv_obj_get_user_data(w);
+          if (ctx) switcher_show(ctx, idx);
+        },
+        LV_EVENT_CLICKED, nullptr);
+
+    sctx->tabs.push_back(btn);
+  }
+
+  switcher_show(sctx, 0);
   return true;
 }
 
@@ -136,8 +248,8 @@ ApplyResult LayoutManager::apply(const std::string& json, ApplySource src) {
 
   std::set<std::string> live_paths;
   JsonArrayConst screens = doc["screens"];
-  if (!build_screens(staging, screens, registry(), &r.err, &live_paths,
-                     &r.widgets)) {
+  if (!build_screens(staging, doc.as<JsonObjectConst>(), screens, registry(),
+                     &r.err, &live_paths, &r.widgets)) {
     lv_obj_delete(staging);
     return r;
   }
