@@ -59,11 +59,18 @@ int32_t scale_to_steps(float display_value, float min, float max) {
 
 // ---- label ----
 //
-// Three render modes:
+// Render modes:
 //   - caption only (no `bind`)     -> one large-font line of static text
-//   - bind only   (no `label`)     -> one large-font line of formatted value
-//   - both                         -> small-font caption on top, large-font
-//                                     value below (typical HMI tile layout)
+//   - bind only   (no `label`)     -> body text large-font, centered
+//   - both                         -> small-font caption on top, body
+//                                     below (typical HMI tile layout)
+//
+// Body text is the SK meta `description` when one is published, else
+// the formatted numeric value. This makes a label bound to e.g.
+// `electrical.switches.bank.213.1.state` show "BMS DnC" instead of
+// "1.0", which matches what operators read on the physical relay.
+// The tile background is zone-tinted from the current value, same as
+// toggle / arc / bar.
 lv_obj_t* build_label(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   const char* path = spec["bind"] | (const char*)nullptr;
   const char* caption = spec["label"] | (const char*)nullptr;
@@ -82,16 +89,14 @@ lv_obj_t* build_label(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   if (!sub) { *err = std::string("kind conflict on ") + path; return nullptr; }
   ctx.live_paths.insert(path);
 
-  // With a bind we always need a container so we can stack caption +
-  // value (when caption is present) or center the value (when not).
   lv_obj_t* root = lv_obj_create(ctx.parent);
   apply_geometry(root, spec);
-  lv_obj_set_style_bg_opa(root, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(root, lv_color_hex(0x161b22), LV_PART_MAIN);
   lv_obj_set_style_border_width(root, 0, LV_PART_MAIN);
   lv_obj_set_style_outline_width(root, 0, LV_PART_MAIN);
   lv_obj_set_style_outline_pad(root, 0, LV_PART_MAIN);
   lv_obj_set_style_shadow_width(root, 0, LV_PART_MAIN);
-  lv_obj_set_style_radius(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_radius(root, 6, LV_PART_MAIN);
   lv_obj_set_style_pad_all(root, 4, LV_PART_MAIN);
   lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -113,12 +118,19 @@ lv_obj_t* build_label(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
     lv_obj_center(val);
   }
 
-  auto* d = new Disp(parse_display(spec));
-  lv_obj_set_user_data(val, d);
+  // The observer needs both the value-label and the tile root so it
+  // can update the text and the bg color on each delta. Stash both on
+  // the value label.
+  struct LabelCtx {
+    Disp d;
+    lv_obj_t* tile;
+  };
+  auto* lctx = new LabelCtx{parse_display(spec), root};
+  lv_obj_set_user_data(val, lctx);
   lv_obj_add_event_cb(
       val,
       [](lv_event_t* e) {
-        delete static_cast<Disp*>(lv_obj_get_user_data(
+        delete static_cast<LabelCtx*>(lv_obj_get_user_data(
             static_cast<lv_obj_t*>(lv_event_get_target(e))));
       },
       LV_EVENT_DELETE, nullptr);
@@ -127,11 +139,17 @@ lv_obj_t* build_label(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
       sub,
       [](lv_observer_t* obs, lv_subject_t* s) {
         auto* w = lv_observer_get_target_obj(obs);
-        auto* d = static_cast<Disp*>(lv_obj_get_user_data(w));
-        float v = lv_subject_get_float(s) * d->scale + d->offset;
-        lv_label_set_text_fmt(w, "%.*f %s", d->decimals, v, d->unit);
-        uint32_t c = zone_color(d->path, v, kFgHex);
-        lv_obj_set_style_text_color(w, lv_color_hex(c), LV_PART_MAIN);
+        auto* lc = static_cast<LabelCtx*>(lv_obj_get_user_data(w));
+        float v = lv_subject_get_float(s) * lc->d.scale + lc->d.offset;
+        // Prefer the SK meta description over the formatted value.
+        const std::string& desc = zones().description(lc->d.path);
+        if (!desc.empty()) {
+          lv_label_set_text(w, desc.c_str());
+        } else {
+          lv_label_set_text_fmt(w, "%.*f %s", lc->d.decimals, v, lc->d.unit);
+        }
+        uint32_t bg = zone_color(lc->d.path, v, 0x161b22);
+        lv_obj_set_style_bg_color(lc->tile, lv_color_hex(bg), LV_PART_MAIN);
       },
       val, nullptr);
 

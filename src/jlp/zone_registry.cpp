@@ -57,6 +57,11 @@ const Zone* ZoneRegistry::match(const std::string& path,
 
 void ZoneRegistry::apply_meta(const std::string& path,
                               const JsonObjectConst& meta) {
+  const char* desc = meta["description"] | (const char*)nullptr;
+  if (desc && *desc) {
+    descriptions_[path] = desc;
+    ESP_LOGI(TAG, "%s: description=\"%s\"", path.c_str(), desc);
+  }
   JsonArrayConst zarr = meta["zones"];
   if (zarr.isNull() || zarr.size() == 0) return;
   std::vector<Zone> zs;
@@ -68,6 +73,12 @@ void ZoneRegistry::apply_meta(const std::string& path,
   map_[path] = std::move(zs);
   ESP_LOGI(TAG, "%s: %u zones loaded from WS meta", path.c_str(),
            (unsigned)map_[path].size());
+}
+
+const std::string& ZoneRegistry::description(const std::string& path) const {
+  static const std::string empty;
+  auto it = descriptions_.find(path);
+  return it == descriptions_.end() ? empty : it->second;
 }
 
 void ZoneRegistry::hook_sk_ws() {

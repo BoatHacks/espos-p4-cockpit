@@ -38,12 +38,20 @@ class ZoneRegistry {
   // if no zones for this path or value falls outside all zones.
   const Zone* match(const std::string& path, float display_value) const;
 
+  // Returns the path's SK meta `description` if one was published, or
+  // empty string. Used by widgets that want to show the human-readable
+  // path name instead of (or alongside) a raw value — e.g. a label on
+  // a switch state where "1" is meaningless but "BMS DnC" is the
+  // operator-facing identifier of the relay.
+  const std::string& description(const std::string& path) const;
+
   // Manually feed a meta object (e.g. from a test). Normally not
   // called by user code — the WS callback does this.
   void apply_meta(const std::string& path, const JsonObjectConst& meta);
 
  private:
   std::unordered_map<std::string, std::vector<Zone>> map_;
+  std::unordered_map<std::string, std::string> descriptions_;
 };
 
 ZoneRegistry& zones();
