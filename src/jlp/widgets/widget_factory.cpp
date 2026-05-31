@@ -214,24 +214,53 @@ lv_obj_t* build_toggle(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
       },
       root, nullptr);
 
-  // Click → send PUT with the opposite of what's currently displayed.
-  // No optimistic state mutation: we wait for the server echo.
-  auto* path_owned = new std::string(path);
+  // Click → send PUT for the opposite of what the SUBSCRIPTION says
+  // (not what LVGL just latched, since lv_switch flips itself on click
+  // before our handler fires). Let LVGL's optimistic visual flip stand
+  // briefly so the tap feels responsive, then 500ms later reconcile
+  // against the subject — if no echo arrived, snap back to truth.
+  // 500ms is comfortably above the ~300ms Maretron 126208 ACK round
+  // trip so a successful command doesn't trigger a visible re-flip.
+  struct TogglePressCtx {
+    std::string path;
+    lv_subject_t* sub;
+    lv_obj_t* sw;
+    lv_timer_t* reconcile;
+  };
+  auto* ctx_owned = new TogglePressCtx{path, sub, sw, nullptr};
   lv_obj_add_event_cb(
       sw,
       [](lv_event_t* e) {
-        auto* p = static_cast<std::string*>(lv_event_get_user_data(e));
-        auto* w = static_cast<lv_obj_t*>(lv_event_get_target(e));
-        bool now_on = lv_obj_has_state(w, LV_STATE_CHECKED);
-        put_bool(*p, !now_on);
+        auto* c = static_cast<TogglePressCtx*>(lv_event_get_user_data(e));
+        bool was_on = lv_subject_get_int(c->sub) != 0;
+        put_bool(c->path, !was_on);
+        // Cancel any prior pending reconcile — user can tap again
+        // before the previous one fires.
+        if (c->reconcile) {
+          lv_timer_delete(c->reconcile);
+          c->reconcile = nullptr;
+        }
+        c->reconcile = lv_timer_create(
+            [](lv_timer_t* t) {
+              auto* c = static_cast<TogglePressCtx*>(lv_timer_get_user_data(t));
+              bool sub_on = lv_subject_get_int(c->sub) != 0;
+              if (sub_on) lv_obj_add_state(c->sw, LV_STATE_CHECKED);
+              else        lv_obj_remove_state(c->sw, LV_STATE_CHECKED);
+              lv_timer_delete(t);
+              c->reconcile = nullptr;
+            },
+            500, c);
+        lv_timer_set_repeat_count(c->reconcile, 1);
       },
-      LV_EVENT_CLICKED, path_owned);
+      LV_EVENT_CLICKED, ctx_owned);
   lv_obj_add_event_cb(
       sw,
       [](lv_event_t* e) {
-        delete static_cast<std::string*>(lv_event_get_user_data(e));
+        auto* c = static_cast<TogglePressCtx*>(lv_event_get_user_data(e));
+        if (c->reconcile) lv_timer_delete(c->reconcile);
+        delete c;
       },
-      LV_EVENT_DELETE, path_owned);
+      LV_EVENT_DELETE, ctx_owned);
 
   return root;
 }
