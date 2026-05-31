@@ -42,7 +42,15 @@ const Zone* ZoneRegistry::match(const std::string& path,
   auto it = map_.find(path);
   if (it == map_.end()) return nullptr;
   for (const Zone& z : it->second) {
-    if (display_value >= z.lower && display_value < z.upper) return &z;
+    // SK convention is half-open [lower, upper). That makes a "point
+    // zone" where lower == upper (commonly authored for bool/int state
+    // paths like a switch position — alert at 0, nominal at 1) match
+    // nothing. Treat that case as equality on the point instead.
+    if (z.lower == z.upper) {
+      if (display_value == z.lower) return &z;
+    } else if (display_value >= z.lower && display_value < z.upper) {
+      return &z;
+    }
   }
   return nullptr;
 }
