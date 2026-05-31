@@ -224,7 +224,7 @@ The device subscribes to every `bind` path in the active layout over a single Si
 The device requests meta in-stream (`sendMeta=all`) and uses two kinds of meta per path:
 
 - **`displayUnits` formula** (preferred when available): inferred `scale` / `offset` / `unit` so a widget without an explicit `display` block still formats sensibly.
-- **`zones[]`**: array of `{lower?, upper?, state}` entries where `state ∈ {nominal, alert, warn, alarm, emergency}`. The widget's background is tinted per the matching zone (alarm > emergency > warn > alert > nominal in precedence). Widgets without zone meta get the theme default.
+- **`zones[]`**: array of `{lower?, upper?, state}` entries where `state ∈ {nominal, alert, warn, alarm, emergency}`. Matching is in **raw SK units** (`lower ≤ raw_value < upper`, or `raw_value == lower` when `lower == upper` for point zones on bool/int paths). Zones are first-match in declaration order. Matching widget's background is tinted per the state, using a maritime-helm escalation palette: nominal/normal → green, alert → yellow, warn → orange, alarm → red, emergency → purple. Widgets without zone meta get the theme default. *Note: this palette is one severity step warmer than the SK spec defaults (which puts alert at blue) — chosen so a glance at the helm reads like a traffic light.*
 
 When the layout's explicit `display` block is present it overrides the path's `displayUnits` formula.
 

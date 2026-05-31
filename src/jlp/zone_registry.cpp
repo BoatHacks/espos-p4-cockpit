@@ -26,15 +26,19 @@ ZoneState parse_state(const char* s) {
 }  // namespace
 
 uint32_t color_for_state(ZoneState s) {
+  // Maritime-helm escalation palette: green safe → yellow notice → orange
+  // act-soon → red act-now → purple critical/system-down. Bumps every SK
+  // state one severity step warmer than the SK spec defaults so a glance
+  // at the helm reads like a traffic light.
   switch (s) {
     case ZoneState::Nominal:
     case ZoneState::Normal:    return 0x3fb950;  // green
-    case ZoneState::Alert:     return 0x58a6ff;  // blue (accent)
-    case ZoneState::Warn:      return 0xd29922;  // yellow
-    case ZoneState::Alarm:     return 0xdb6d28;  // orange
-    case ZoneState::Emergency: return 0xf85149;  // red
+    case ZoneState::Alert:     return 0xd29922;  // yellow
+    case ZoneState::Warn:      return 0xdb6d28;  // orange
+    case ZoneState::Alarm:     return 0xf85149;  // red
+    case ZoneState::Emergency: return 0xa371f7;  // purple
   }
-  return 0x58a6ff;
+  return 0xd29922;
 }
 
 const Zone* ZoneRegistry::match(const std::string& path,
