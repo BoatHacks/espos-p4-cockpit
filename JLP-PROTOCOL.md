@@ -137,15 +137,17 @@ Liveness probe. Returns 200 `{"ok":true}` if the device is up. No body fields ar
 
 ### Common widget fields
 
-| Field     | Type    | Required | Default | Notes                                                  |
-|-----------|---------|----------|---------|--------------------------------------------------------|
-| `type`    | string  | yes      | —       | Widget kind. Must be one the device's `/hello` lists.  |
-| `id`      | string  | yes      | —       | Unique within the enclosing screen.                    |
-| `x`, `y`  | int     | no       | `0`     | Top-left position in device pixels (origin top-left).  |
-| `w`, `h`  | int     | no       | `120`, `60` | Pixel size.                                        |
-| `label`   | string  | no       | —       | Caption text. Semantics depend on widget kind.         |
-| `bind`    | string  | no       | —       | SignalK path. Required for everything except a label whose `label` is a fixed string. |
-| `display` | object  | no       | —       | Value formatting (see below).                          |
+| Field      | Type    | Required | Default | Notes                                                  |
+|------------|---------|----------|---------|--------------------------------------------------------|
+| `type`     | string  | yes      | —       | Widget kind. Must be one the device's `/hello` lists.  |
+| `id`       | string  | yes      | —       | Unique within the enclosing screen.                    |
+| `x`, `y`   | int     | no       | `0`     | Top-left position in device pixels (origin top-left).  |
+| `w`, `h`   | int     | no       | `120`, `60` | Pixel size.                                        |
+| `label`    | string  | no       | —       | Caption text. Semantics depend on widget kind.         |
+| `bind`     | string  | no       | —       | SignalK path. Required for everything except a label whose `label` is a fixed string. |
+| `display`  | object  | no       | —       | Value formatting (see below).                          |
+| `bg_color` | string  | no       | theme `#161b22` | Hex color (`#rrggbb` or `#rgb`) for the tile background. **SK zones still win** when the path matches one; this is the fallback. Use it for operator-meaningful fixed colors (STOP=red, ACK=yellow) that should be visible even without zone state. |
+| `fg_color` | string  | no       | theme `#e6edf3` / `#58a6ff` | Hex color for the value text (label/bar) or arc indicator. Same zone-wins precedence. |
 
 ### `display` object
 

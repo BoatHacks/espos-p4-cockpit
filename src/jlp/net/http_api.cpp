@@ -261,19 +261,19 @@ esp_err_t hello_get(httpd_req_t* req) {
     case ApplySource::Boot: default: src_str = "boot";       break;
   }
   // Single buffer; widget catalog is small enough to inline.
-  char buf[1024];
+  char buf[1280];
   snprintf(buf, sizeof(buf),
       "{"
         "\"schema\":1,"
         "\"name\":\"%s\","
         "\"hostname\":\"p4-cockpit\","
-        "\"firmware\":\"p4-cockpit-jlp-0.1.0\","
+        "\"firmware\":\"p4-cockpit-jlp-0.2.0\","
         "\"display\":{\"w\":1024,\"h\":600},"
         "\"widgets\":{"
-          "\"label\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\"]},"
-          "\"toggle\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\"]},"
-          "\"arc\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\",\"min\",\"max\",\"start_angle\",\"end_angle\"]},"
-          "\"bar\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\",\"min\",\"max\",\"vertical\"]}"
+          "\"label\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\",\"bg_color\",\"fg_color\"]},"
+          "\"toggle\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"bg_color\",\"fg_color\"]},"
+          "\"arc\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\",\"min\",\"max\",\"start_angle\",\"end_angle\",\"bg_color\",\"fg_color\"]},"
+          "\"bar\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\",\"min\",\"max\",\"vertical\",\"bg_color\",\"fg_color\"]}"
         "},"
         "\"active_layout_name\":\"%s\","
         "\"layout_source\":\"%s\""
