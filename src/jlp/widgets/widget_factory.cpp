@@ -640,6 +640,138 @@ lv_obj_t* build_bar(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   return root;
 }
 
+// ---- bargroup ----
+//
+// N vertical bars under a single caption. Each sub-bar binds
+// independently (its own SK path, min/max, display) and gets its
+// own SK-zone tinting from the live registry. The container handles
+// caption + horizontal layout; each sub-bar reuses the RangeBinding
+// observer pattern from build_bar.
+lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
+                         std::string* err) {
+  const Colors colors = parse_colors(spec);
+  JsonArrayConst bars = spec["bars"];
+  if (bars.isNull() || bars.size() == 0) {
+    *err = "bargroup: bars[] required";
+    return nullptr;
+  }
+
+  lv_obj_t* root = lv_obj_create(ctx.parent);
+  apply_geometry(root, spec);
+  lv_obj_set_style_bg_color(root, lv_color_hex(colors.bg), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(root, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_border_color(root, lv_color_hex(0x30363d), LV_PART_MAIN);
+  lv_obj_set_style_border_width(root, 1, LV_PART_MAIN);
+  lv_obj_set_style_outline_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_outline_pad(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_shadow_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_radius(root, 6, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(root, 8, LV_PART_MAIN);
+  lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
+
+  // Group caption flushed top-left.
+  const char* caption = spec["label"] | (const char*)nullptr;
+  int caption_h = 0;
+  if (caption) {
+    lv_obj_t* cap = lv_label_create(root);
+    lv_obj_set_style_text_color(cap, lv_color_hex(kMutedHex), LV_PART_MAIN);
+    lv_obj_set_style_text_font(cap, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_label_set_text(cap, caption);
+    lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 0, 0);
+    caption_h = 20;
+  }
+
+  // Per-bar geometry: equal slots across the inner width, beneath
+  // the caption. Each cell has a vertical bar that fills its track
+  // from the bottom, with a small bar label below it.
+  int inner_w = (spec["w"] | 120) - 16;        // pad_all=8
+  int inner_h = (spec["h"] | 60) - 16 - caption_h;
+  int n = (int)bars.size();
+  if (n <= 0) n = 1;
+  int slot_w = inner_w / n;
+  int bar_w = slot_w - 8;
+  if (bar_w < 12) bar_w = 12;
+  int bar_h = inner_h - 24;  // label below
+  if (bar_h < 20) bar_h = 20;
+
+  int idx = 0;
+  for (JsonObjectConst bspec : bars) {
+    const char* b_path = bspec["bind"] | (const char*)nullptr;
+    if (!b_path) { idx++; continue; }
+    lv_subject_t* sub = ctx.reg.get_or_create(b_path, SubjectKind::Float);
+    if (!sub) {
+      *err = std::string("kind conflict on ") + b_path;
+      return nullptr;
+    }
+    ctx.live_paths.insert(b_path);
+
+    int cell_x = slot_w * idx + (slot_w - bar_w) / 2;
+    int cell_y = caption_h;
+
+    lv_obj_t* bar = lv_bar_create(root);
+    lv_obj_set_size(bar, bar_w, bar_h);
+    lv_obj_set_pos(bar, cell_x, cell_y);
+    lv_bar_set_range(bar, 0, kBarSteps);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(0x30363d), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(kAccentHex), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
+    // Vertical: lv_bar's default mode is horizontal; size+orientation
+    // is determined by the widget aspect, so a tall narrow bar fills
+    // from the top by default — we want bottom-up.
+    lv_bar_set_orientation(bar, LV_BAR_ORIENTATION_VERTICAL);
+
+    // Build a RangeBinding from the sub-bar spec.
+    Disp d{1.f, 0.f, 0, "", ""};
+    JsonObjectConst display = bspec["display"];
+    if (!display.isNull()) {
+      d.scale = display["scale"] | 1.f;
+      d.offset = display["offset"] | 0.f;
+      d.decimals = display["decimals"] | 0;
+      snprintf(d.unit, sizeof(d.unit), "%s", display["unit"] | "");
+    }
+    snprintf(d.path, sizeof(d.path), "%s", b_path);
+    auto* rb = new RangeBinding{d, bspec["min"] | 0.f, bspec["max"] | 100.f,
+                                colors};
+    lv_obj_set_user_data(bar, rb);
+    lv_obj_add_event_cb(
+        bar,
+        [](lv_event_t* e) {
+          delete static_cast<RangeBinding*>(lv_obj_get_user_data(
+              static_cast<lv_obj_t*>(lv_event_get_target(e))));
+        },
+        LV_EVENT_DELETE, nullptr);
+    lv_subject_add_observer_obj(
+        sub,
+        [](lv_observer_t* obs, lv_subject_t* s) {
+          auto* w = lv_observer_get_target_obj(obs);
+          auto* rb = static_cast<RangeBinding*>(lv_obj_get_user_data(w));
+          float raw = lv_subject_get_float(s);
+          float v = raw * rb->display.scale + rb->display.offset;
+          lv_bar_set_value(w, scale_to_steps(v, rb->min, rb->max), LV_ANIM_OFF);
+          uint32_t c = zone_color(rb->display.path, raw, kAccentHex);
+          lv_obj_set_style_bg_color(w, lv_color_hex(c), LV_PART_INDICATOR);
+        },
+        bar, nullptr);
+
+    // Per-bar caption below the bar.
+    const char* b_label = bspec["label"] | "";
+    if (*b_label) {
+      lv_obj_t* lbl = lv_label_create(root);
+      lv_obj_set_style_text_color(lbl, lv_color_hex(kMutedHex), LV_PART_MAIN);
+      lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, LV_PART_MAIN);
+      lv_label_set_text(lbl, b_label);
+      lv_obj_set_pos(lbl, cell_x, cell_y + bar_h + 4);
+      lv_obj_set_width(lbl, bar_w);
+      lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    }
+
+    idx++;
+  }
+
+  return root;
+}
+
 // ---- button ----
 //
 // Momentary + hold-to-act semantics:
@@ -810,8 +942,9 @@ lv_obj_t* build_widget(BuildCtx& ctx, JsonObjectConst spec,
   if (t == "label")  return build_label(ctx, spec, err);
   if (t == "toggle") return build_toggle(ctx, spec, err);
   if (t == "arc")    return build_arc(ctx, spec, err);
-  if (t == "bar")    return build_bar(ctx, spec, err);
-  if (t == "button") return build_button(ctx, spec, err);
+  if (t == "bar")      return build_bar(ctx, spec, err);
+  if (t == "bargroup") return build_bargroup(ctx, spec, err);
+  if (t == "button")   return build_button(ctx, spec, err);
   *err = std::string("unknown widget kind: ") + t;
   return nullptr;
 }

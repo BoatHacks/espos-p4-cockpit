@@ -191,6 +191,12 @@ Displayed value = `(raw × scale) + offset`, formatted to `decimals`, then `unit
   - `vertical` (bool, default `false`).
 - Subject kind: `Float`.
 
+#### `bargroup`
+- Extra fields:
+  - `bars` (array, required) — at least one sub-bar. Each entry is `{label, bind, min, max, display?}`. Each sub-bar binds to its own SK path with its own range and display formatting, and gets its own SK-zone tinting independently.
+- Renders the group caption (top-level `label`) at the top-left and lays out the bars in equal-width slots beneath. Each bar fills bottom-up; the per-bar `label` prints below it.
+- No top-level `bind` — the widget is a pure container. `bg_color` / `fg_color` apply to the container; per-sub-bar fill colors come from zones (or the theme accent fallback).
+
 #### `button`
 - Extra fields:
   - `bind` (string, required) — SK path to PUT.
