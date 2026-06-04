@@ -13,5 +13,7 @@ namespace jlp {
 // callbacks already are).
 void put_bool(const std::string& path, bool value);
 void put_int(const std::string& path, int value);
+void put_float(const std::string& path, float value);
+void put_string(const std::string& path, const std::string& value);
 
 }  // namespace jlp

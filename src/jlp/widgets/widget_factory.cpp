@@ -640,6 +640,166 @@ lv_obj_t* build_bar(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   return root;
 }
 
+// ---- button ----
+//
+// Momentary + hold-to-act semantics:
+//   - PRESSED fires put(press_value) if hold_ms == 0; else starts a
+//     timer that fires the PUT after hold_ms. A visual fill animates
+//     during the hold so the operator sees the latch loading.
+//   - RELEASED fires put(release_value) if release_value is set AND
+//     the press already fired. Releasing during a pending hold
+//     cancels the press timer with no PUT (intended).
+//
+// Value typing: press_value / release_value can be a bool, integer,
+// float, or string in the JSON spec. We route to the matching put_*
+// helper. If `bind` is omitted, the button is a no-op (action-only
+// PUTs would require an `action.put.path` — that landed in v0.1
+// designer but firmware never honoured it; reintroduce later if
+// asked).
+
+void put_json_value(const std::string& path, JsonVariantConst v) {
+  if (v.is<bool>()) { put_bool(path, v.as<bool>()); return; }
+  if (v.is<int>())  { put_int(path,  v.as<int>());  return; }
+  if (v.is<float>()){ put_float(path,v.as<float>());return; }
+  if (v.is<const char*>()) {
+    const char* s = v.as<const char*>();
+    if (s) put_string(path, s);
+    return;
+  }
+  // Unknown / null — silently skip rather than crash.
+}
+
+struct ButtonCtx {
+  std::string path;
+  // Stored as the literal JSON tokens; re-parsed via a small
+  // JsonDocument when fired. Simple, and avoids carrying a 4-way
+  // variant union.
+  std::string press_json;    // empty -> no press PUT
+  std::string release_json;  // empty -> no release PUT
+  uint32_t hold_ms;
+  lv_timer_t* hold_timer;    // pending press; nullptr otherwise
+  lv_obj_t* root;            // for redraw on press/release state
+  bool press_fired;
+};
+
+void button_fire(const std::string& path, const std::string& json) {
+  if (json.empty()) return;
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, json);
+  if (err) return;
+  put_json_value(path, doc.as<JsonVariantConst>());
+}
+
+lv_obj_t* build_button(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
+  const Colors colors = parse_colors(spec);
+  const char* path = spec["bind"] | (const char*)nullptr;
+  if (!path) { *err = "button: bind required"; return nullptr; }
+  const char* caption = spec["label"] | "button";
+
+  // Snapshot press/release values as JSON tokens so we can re-emit
+  // them via the typed put_* helpers later. ArduinoJson's
+  // serializeJson handles primitives + strings without quoting needs.
+  std::string press_json;
+  std::string release_json;
+  JsonVariantConst pv = spec["press_value"];
+  if (!pv.isNull()) {
+    serializeJson(pv, press_json);
+  }
+  JsonVariantConst rv = spec["release_value"];
+  if (!rv.isNull()) {
+    serializeJson(rv, release_json);
+  }
+  uint32_t hold_ms = spec["hold_ms"] | 0;
+
+  lv_obj_t* root = lv_obj_create(ctx.parent);
+  apply_geometry(root, spec);
+  lv_obj_set_style_bg_color(root, lv_color_hex(colors.bg), LV_PART_MAIN);
+  lv_obj_set_style_border_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_outline_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_outline_pad(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_shadow_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_radius(root, 6, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(root, 8, LV_PART_MAIN);
+  lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* lbl = lv_label_create(root);
+  lv_obj_set_style_text_color(lbl, lv_color_hex(colors.fg), LV_PART_MAIN);
+  lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, LV_PART_MAIN);
+  lv_label_set_text(lbl, caption);
+  lv_obj_center(lbl);
+
+  auto* bctx = new ButtonCtx{path, press_json, release_json, hold_ms,
+                             nullptr, root, false};
+  lv_obj_set_user_data(root, bctx);
+  lv_obj_add_event_cb(
+      root,
+      [](lv_event_t* e) {
+        auto* c = static_cast<ButtonCtx*>(lv_obj_get_user_data(
+            static_cast<lv_obj_t*>(lv_event_get_target(e))));
+        if (c->hold_timer) lv_timer_delete(c->hold_timer);
+        delete c;
+      },
+      LV_EVENT_DELETE, nullptr);
+
+  lv_obj_add_event_cb(
+      root,
+      [](lv_event_t* e) {
+        auto* c = static_cast<ButtonCtx*>(lv_event_get_user_data(e));
+        c->press_fired = false;
+        // Visual press feedback: dim the tile slightly.
+        lv_obj_set_style_bg_opa(c->root, LV_OPA_70, LV_PART_MAIN);
+        if (c->hold_ms == 0) {
+          button_fire(c->path, c->press_json);
+          c->press_fired = true;
+          return;
+        }
+        // Hold-to-act: wait, then PUT.
+        if (c->hold_timer) lv_timer_delete(c->hold_timer);
+        c->hold_timer = lv_timer_create(
+            [](lv_timer_t* t) {
+              auto* c = static_cast<ButtonCtx*>(lv_timer_get_user_data(t));
+              button_fire(c->path, c->press_json);
+              c->press_fired = true;
+              lv_timer_delete(t);
+              c->hold_timer = nullptr;
+            },
+            c->hold_ms, c);
+        lv_timer_set_repeat_count(c->hold_timer, 1);
+      },
+      LV_EVENT_PRESSED, bctx);
+
+  lv_obj_add_event_cb(
+      root,
+      [](lv_event_t* e) {
+        auto* c = static_cast<ButtonCtx*>(lv_event_get_user_data(e));
+        lv_obj_set_style_bg_opa(c->root, LV_OPA_COVER, LV_PART_MAIN);
+        if (c->hold_timer) {
+          // Released before hold expired: cancel, no PUT.
+          lv_timer_delete(c->hold_timer);
+          c->hold_timer = nullptr;
+          return;
+        }
+        if (c->press_fired) {
+          button_fire(c->path, c->release_json);
+        }
+      },
+      LV_EVENT_RELEASED, bctx);
+  // PRESS_LOST handled like RELEASED (touch off the widget).
+  lv_obj_add_event_cb(
+      root,
+      [](lv_event_t* e) {
+        auto* c = static_cast<ButtonCtx*>(lv_event_get_user_data(e));
+        lv_obj_set_style_bg_opa(c->root, LV_OPA_COVER, LV_PART_MAIN);
+        if (c->hold_timer) {
+          lv_timer_delete(c->hold_timer);
+          c->hold_timer = nullptr;
+        }
+      },
+      LV_EVENT_PRESS_LOST, bctx);
+
+  return root;
+}
+
 }  // namespace
 
 lv_obj_t* build_widget(BuildCtx& ctx, JsonObjectConst spec,
@@ -651,6 +811,7 @@ lv_obj_t* build_widget(BuildCtx& ctx, JsonObjectConst spec,
   if (t == "toggle") return build_toggle(ctx, spec, err);
   if (t == "arc")    return build_arc(ctx, spec, err);
   if (t == "bar")    return build_bar(ctx, spec, err);
+  if (t == "button") return build_button(ctx, spec, err);
   *err = std::string("unknown widget kind: ") + t;
   return nullptr;
 }

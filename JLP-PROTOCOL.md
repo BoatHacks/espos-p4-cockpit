@@ -191,8 +191,15 @@ Displayed value = `(raw × scale) + offset`, formatted to `decimals`, then `unit
   - `vertical` (bool, default `false`).
 - Subject kind: `Float`.
 
-#### `button` *(reserved)*
-- Not yet implemented by the reference firmware (not advertised in `/hello.widgets`). The designer offers it for layout authoring; pushes referencing `button` to a device that doesn't list it will be rejected.
+#### `button`
+- Extra fields:
+  - `bind` (string, required) — SK path to PUT.
+  - `press_value` (bool|int|float|string, required) — value sent on press.
+  - `release_value` (bool|int|float|string, optional) — value sent on release. Omit for one-shot actions like ACK.
+  - `hold_ms` (int, optional) — when set, the press_value PUT only fires after the button has been held this long; releasing earlier cancels with no PUT. Use as a safety latch for STOP or anchor release.
+  - `bg_color`, `fg_color` (string, optional) — fixed colors (see Common widget fields).
+- Renders a centered caption on a tinted tile. Press dims the tile to ~70% opacity for visual feedback; release restores opacity.
+- Touch-off-widget (press lost) cancels any pending hold and emits no release PUT.
 
 ### Validation rules
 

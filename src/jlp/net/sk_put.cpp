@@ -12,10 +12,12 @@ namespace jlp {
 
 namespace {
 
-// One SKPutRequest per (path, kind). int and bool are tracked
-// separately since the JSON types differ on the wire.
+// One SKPutRequest per (path, kind). Different value types are
+// tracked separately since the JSON wire format differs.
 std::unordered_map<std::string, sensesp::SKPutRequest<bool>*> g_bool;
 std::unordered_map<std::string, sensesp::SKPutRequest<int>*> g_int;
+std::unordered_map<std::string, sensesp::SKPutRequest<float>*> g_float;
+std::unordered_map<std::string, sensesp::SKPutRequest<String>*> g_string;
 
 template <class T>
 sensesp::SKPutRequest<T>* get(
@@ -41,6 +43,16 @@ void put_bool(const std::string& path, bool value) {
 void put_int(const std::string& path, int value) {
   ESP_LOGI(TAG, "PUT %s = %d", path.c_str(), value);
   get(g_int, path)->set(value);
+}
+
+void put_float(const std::string& path, float value) {
+  ESP_LOGI(TAG, "PUT %s = %f", path.c_str(), value);
+  get(g_float, path)->set(value);
+}
+
+void put_string(const std::string& path, const std::string& value) {
+  ESP_LOGI(TAG, "PUT %s = \"%s\"", path.c_str(), value.c_str());
+  get(g_string, path)->set(String(value.c_str()));
 }
 
 }  // namespace jlp
