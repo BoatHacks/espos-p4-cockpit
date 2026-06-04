@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <cstring>
 #include <functional>
 #include <string>
 #include <unordered_map>
@@ -75,15 +76,35 @@ class NotificationsRegistry {
   /** All currently-tracked notifications, sorted by severity descending. */
   std::vector<Notification> snapshot() const;
 
-  /** Register a change observer. Fires on the event_loop task. */
+  /** Register a change observer. Returns an opaque token; the caller
+   *  must call `off_change(token)` before any captured pointer is
+   *  destroyed. Fires on the event_loop task. */
   using Observer = std::function<void()>;
-  void on_change(Observer cb) { observers_.push_back(std::move(cb)); }
+  using ObserverToken = uint32_t;
+  ObserverToken on_change(Observer cb) {
+    ObserverToken tok = next_token_++;
+    observers_.push_back({tok, std::move(cb)});
+    return tok;
+  }
+  void off_change(ObserverToken token) {
+    for (auto it = observers_.begin(); it != observers_.end(); ++it) {
+      if (it->token == token) {
+        observers_.erase(it);
+        return;
+      }
+    }
+  }
 
  private:
   void fire_observers();
 
+  struct Slot {
+    ObserverToken token;
+    Observer cb;
+  };
   std::unordered_map<std::string, Notification> map_;
-  std::vector<Observer> observers_;
+  std::vector<Slot> observers_;
+  ObserverToken next_token_ = 1;
 };
 
 NotificationsRegistry& notifications();

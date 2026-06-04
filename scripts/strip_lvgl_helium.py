@@ -20,5 +20,11 @@ helium_dir = os.path.join(
     "lvgl", "src", "draw", "sw", "blend", "helium",
 )
 if os.path.isdir(helium_dir):
-    shutil.rmtree(helium_dir)
-    print(f"strip_lvgl_helium: removed {helium_dir}")
+    try:
+        shutil.rmtree(helium_dir)
+        print(f"strip_lvgl_helium: removed {helium_dir}")
+    except OSError as e:
+        # Don't abort the build — at worst the helium .S file remains
+        # and the next assemble step fails with a clearer error.
+        print(f"strip_lvgl_helium: warning: failed to remove "
+              f"{helium_dir}: {e}")

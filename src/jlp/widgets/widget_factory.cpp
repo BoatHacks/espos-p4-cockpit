@@ -436,7 +436,6 @@ lv_obj_t* build_arc(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   // since SVG text is cheap on the browser.
   int tick_count = spec["ticks"] | 0;
   if (tick_count > 1) {
-    static lv_point_precise_t tick_pts[2];  // reused per tick
     float r_outer = side / 2.0f;
     float r_inner = r_outer - 6.0f;
     if (r_inner < 0) r_inner = 0;
@@ -446,9 +445,11 @@ lv_obj_t* build_arc(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
       float t = (float)i / (float)(tick_count - 1);
       float a = sa + total_sweep * t;
       float rad = a * 3.14159265f / 180.0f;
-      // lv_line takes points relative to its parent; create a tiny
-      // 1x1 lv_line for each tick.
+      // lv_line stores the points pointer rather than copying — each
+      // tick needs its own backing buffer that lives as long as the
+      // line object. Heap-allocate and free in LV_EVENT_DELETE.
       lv_obj_t* tick = lv_line_create(root);
+      auto* tick_pts = new lv_point_precise_t[2];
       tick_pts[0].x = (lv_value_precise_t)(cx + r_inner * cosf(rad)
                                            + (box_w - side) / 2);
       tick_pts[0].y = (lv_value_precise_t)(cy + r_inner * sinf(rad)
@@ -458,6 +459,13 @@ lv_obj_t* build_arc(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
       tick_pts[1].y = (lv_value_precise_t)(cy + r_outer * sinf(rad)
                                            + (box_h - side) / 2);
       lv_line_set_points(tick, tick_pts, 2);
+      lv_obj_add_event_cb(
+          tick,
+          [](lv_event_t* e) {
+            delete[] static_cast<lv_point_precise_t*>(
+                lv_event_get_user_data(e));
+          },
+          LV_EVENT_DELETE, tick_pts);
       lv_obj_set_style_line_color(tick, lv_color_hex(kMutedHex), LV_PART_MAIN);
       lv_obj_set_style_line_width(tick, 1, LV_PART_MAIN);
     }
@@ -750,7 +758,11 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
           float raw = lv_subject_get_float(s);
           float v = raw * rb->display.scale + rb->display.offset;
           lv_bar_set_value(w, scale_to_steps(v, rb->min, rb->max), LV_ANIM_OFF);
-          uint32_t c = zone_color(rb->display.path, raw, kAccentHex);
+          // Honor the per-widget fg_color override the same way the
+          // standalone bar widget does — zone match always wins.
+          uint32_t fallback = rb->colors.fg != kFgHex ? rb->colors.fg
+                                                     : kAccentHex;
+          uint32_t c = zone_color(rb->display.path, raw, fallback);
           lv_obj_set_style_bg_color(w, lv_color_hex(c), LV_PART_INDICATOR);
         },
         bar, nullptr);
@@ -962,6 +974,7 @@ struct ListCtx {
   lv_obj_t* tile;          // parent container, holds rows below header
   lv_obj_t* rows_box;      // child container we recycle on each rebuild
   int header_h;
+  NotificationsRegistry::ObserverToken obs_token;
 };
 
 // Resolve a dotted field against a row record. Notifications rows
@@ -1131,19 +1144,23 @@ lv_obj_t* build_list(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   lv_obj_set_style_pad_all(rows_box, 0, LV_PART_MAIN);
   lc->rows_box = rows_box;
 
-  // Stash ctx, free on delete.
+  // Stash ctx; deregister the observer + free on delete (the
+  // registry-observer capture would otherwise dangle after teardown
+  // and segfault on the next notification delta).
   lv_obj_set_user_data(root, lc);
   lv_obj_add_event_cb(
       root,
       [](lv_event_t* e) {
-        delete static_cast<ListCtx*>(lv_obj_get_user_data(
+        auto* lc = static_cast<ListCtx*>(lv_obj_get_user_data(
             static_cast<lv_obj_t*>(lv_event_get_target(e))));
+        notifications().off_change(lc->obs_token);
+        delete lc;
       },
       LV_EVENT_DELETE, nullptr);
 
   // Initial render + observe future registry changes.
   list_rebuild_rows(lc);
-  notifications().on_change([lc]() { list_rebuild_rows(lc); });
+  lc->obs_token = notifications().on_change([lc]() { list_rebuild_rows(lc); });
 
   return root;
 }

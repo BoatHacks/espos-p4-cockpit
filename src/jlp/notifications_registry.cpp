@@ -69,7 +69,10 @@ std::vector<Notification> NotificationsRegistry::snapshot() const {
 }
 
 void NotificationsRegistry::fire_observers() {
-  for (const auto& cb : observers_) cb();
+  // Snapshot first because callbacks might (legitimately) call
+  // off_change() during the fire loop.
+  std::vector<Slot> snapshot = observers_;
+  for (const auto& s : snapshot) s.cb();
 }
 
 void NotificationsRegistry::hook_sk_ws() {
