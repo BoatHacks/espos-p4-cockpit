@@ -3,6 +3,7 @@
 #include <math.h>
 
 #include "../net/sk_put.h"
+#include "../notifications_registry.h"
 #include "../subject_registry.h"
 #include "../zone_registry.h"
 
@@ -932,6 +933,221 @@ lv_obj_t* build_button(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   return root;
 }
 
+// ---- list ----
+//
+// Bound to the synthetic "notifications" virtual path: pulls rows
+// from notifications_registry, re-renders on every registry change.
+// Plain SK array paths are not supported in v1 — we don't have a
+// generic array subject yet (every other widget kind subscribes
+// scalar floats / ints / strings). Adding one is v2 work.
+//
+// Each row is a small label per column; columns are positioned by
+// their `width` (defaults to 100px each). row_color_field is
+// resolved per row to one of {alert, warn, alarm, emergency} and
+// tints the row strip.
+
+struct ListColumn {
+  std::string label;
+  std::string field;
+  int width;
+  std::string format;
+};
+
+struct ListCtx {
+  std::vector<ListColumn> columns;
+  std::string row_color_field;
+  int max_rows;
+  int row_height;
+  Colors colors;
+  lv_obj_t* tile;          // parent container, holds rows below header
+  lv_obj_t* rows_box;      // child container we recycle on each rebuild
+  int header_h;
+};
+
+// Resolve a dotted field against a row record. Notifications rows
+// are flat ({path, state, message}) so this is overkill today, but
+// keeps the door open for nested arrays in v2.
+std::string read_field_str(const Notification& n, const std::string& f) {
+  if (f == "path")    return n.path;
+  if (f == "state")   return not_state_name(n.state);
+  if (f == "message") return n.message;
+  return "";
+}
+
+uint32_t row_color_for(const std::string& state_token) {
+  NotState s = parse_not_state(state_token.c_str());
+  switch (s) {
+    case NotState::Nominal:
+    case NotState::Normal:    return 0x3fb950;
+    case NotState::Alert:     return 0xd29922;
+    case NotState::Warn:      return 0xdb6d28;
+    case NotState::Alarm:     return 0xf85149;
+    case NotState::Emergency: return 0xa371f7;
+  }
+  return 0x161b22;
+}
+
+void list_rebuild_rows(ListCtx* lc) {
+  // Clear existing children of rows_box.
+  lv_obj_clean(lc->rows_box);
+  auto rows = notifications().snapshot();
+  int max_rows = lc->max_rows > 0 ? lc->max_rows : 8;
+  int count = (int)rows.size();
+  if (count > max_rows) count = max_rows;
+  for (int r = 0; r < count; r++) {
+    const Notification& n = rows[r];
+    lv_obj_t* row = lv_obj_create(lc->rows_box);
+    lv_obj_set_size(row, lv_pct(100), lc->row_height);
+    lv_obj_set_pos(row, 0, r * lc->row_height);
+    lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
+    lv_obj_set_style_outline_width(row, 0, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(row, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(row, 4, LV_PART_MAIN);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    uint32_t bg = lc->colors.bg;
+    if (!lc->row_color_field.empty()) {
+      std::string token = read_field_str(n, lc->row_color_field);
+      if (!token.empty()) bg = row_color_for(token);
+    }
+    lv_obj_set_style_bg_color(row, lv_color_hex(bg), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(row, LV_OPA_COVER, LV_PART_MAIN);
+
+    int x = 0;
+    for (const ListColumn& col : lc->columns) {
+      lv_obj_t* cell = lv_label_create(row);
+      lv_obj_set_style_text_color(cell, lv_color_hex(lc->colors.fg),
+                                  LV_PART_MAIN);
+      lv_obj_set_style_text_font(cell, &lv_font_montserrat_14, LV_PART_MAIN);
+      lv_obj_set_pos(cell, x, 4);
+      lv_obj_set_width(cell, col.width);
+      lv_label_set_long_mode(cell, LV_LABEL_LONG_DOT);
+      // format strings are designer-only luxury; the firmware just
+      // shows the raw field text.
+      lv_label_set_text(cell, read_field_str(n, col.field).c_str());
+      x += col.width;
+    }
+  }
+  if (count == 0) {
+    lv_obj_t* empty = lv_label_create(lc->rows_box);
+    lv_obj_set_style_text_color(empty, lv_color_hex(kMutedHex), LV_PART_MAIN);
+    lv_obj_set_style_text_font(empty, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_label_set_text(empty, "(no pending notifications)");
+    lv_obj_center(empty);
+  }
+}
+
+lv_obj_t* build_list(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
+  const Colors colors = parse_colors(spec);
+  const char* bind = spec["bind"] | (const char*)nullptr;
+  if (!bind) { *err = "list: bind required"; return nullptr; }
+  if (strcmp(bind, "notifications") != 0) {
+    *err = std::string("list: bind \"") + bind +
+           "\" not supported in v1 (only \"notifications\")";
+    return nullptr;
+  }
+
+  JsonArrayConst columns = spec["columns"];
+  if (columns.isNull() || columns.size() == 0) {
+    *err = "list: columns[] required";
+    return nullptr;
+  }
+
+  lv_obj_t* root = lv_obj_create(ctx.parent);
+  apply_geometry(root, spec);
+  lv_obj_set_style_bg_color(root, lv_color_hex(colors.bg), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(root, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_border_color(root, lv_color_hex(0x30363d), LV_PART_MAIN);
+  lv_obj_set_style_border_width(root, 1, LV_PART_MAIN);
+  lv_obj_set_style_outline_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_outline_pad(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_shadow_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_radius(root, 6, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(root, 8, LV_PART_MAIN);
+  lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
+
+  // Caption.
+  const char* caption = spec["label"] | (const char*)nullptr;
+  int header_h = 0;
+  if (caption) {
+    lv_obj_t* cap = lv_label_create(root);
+    lv_obj_set_style_text_color(cap, lv_color_hex(kMutedHex), LV_PART_MAIN);
+    lv_obj_set_style_text_font(cap, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_label_set_text(cap, caption);
+    lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 0, 0);
+    header_h = 20;
+  }
+
+  // Column header row.
+  lv_obj_t* hdr = lv_obj_create(root);
+  lv_obj_set_size(hdr, lv_pct(100), 20);
+  lv_obj_set_pos(hdr, 0, header_h);
+  lv_obj_set_style_bg_opa(hdr, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_border_side(hdr, LV_BORDER_SIDE_BOTTOM, LV_PART_MAIN);
+  lv_obj_set_style_border_color(hdr, lv_color_hex(0x30363d), LV_PART_MAIN);
+  lv_obj_set_style_border_width(hdr, 1, LV_PART_MAIN);
+  lv_obj_set_style_outline_width(hdr, 0, LV_PART_MAIN);
+  lv_obj_set_style_shadow_width(hdr, 0, LV_PART_MAIN);
+  lv_obj_set_style_radius(hdr, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(hdr, 0, LV_PART_MAIN);
+  lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
+
+  auto* lc = new ListCtx{};
+  lc->tile = root;
+  lc->max_rows = spec["max_rows"] | 8;
+  lc->row_height = spec["row_height"] | 28;
+  lc->row_color_field = spec["row_color_field"] | "";
+  lc->colors = colors;
+  lc->header_h = header_h + 20;
+
+  int x = 0;
+  for (JsonObjectConst c : columns) {
+    ListColumn col;
+    col.label = c["label"] | "";
+    col.field = c["field"] | "";
+    col.width = c["width"] | 100;
+    col.format = c["format"] | "";
+    lc->columns.push_back(col);
+
+    lv_obj_t* h = lv_label_create(hdr);
+    lv_obj_set_style_text_color(h, lv_color_hex(kMutedHex), LV_PART_MAIN);
+    lv_obj_set_style_text_font(h, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_pos(h, x, 0);
+    lv_obj_set_width(h, col.width);
+    lv_label_set_text(h, col.label.c_str());
+    x += col.width;
+  }
+
+  // Rows container — replaced wholesale on each registry change.
+  lv_obj_t* rows_box = lv_obj_create(root);
+  lv_obj_set_size(rows_box, lv_pct(100),
+                  (spec["h"] | 60) - lc->header_h - 16);
+  lv_obj_set_pos(rows_box, 0, lc->header_h);
+  lv_obj_set_style_bg_opa(rows_box, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_border_width(rows_box, 0, LV_PART_MAIN);
+  lv_obj_set_style_outline_width(rows_box, 0, LV_PART_MAIN);
+  lv_obj_set_style_shadow_width(rows_box, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(rows_box, 0, LV_PART_MAIN);
+  lc->rows_box = rows_box;
+
+  // Stash ctx, free on delete.
+  lv_obj_set_user_data(root, lc);
+  lv_obj_add_event_cb(
+      root,
+      [](lv_event_t* e) {
+        delete static_cast<ListCtx*>(lv_obj_get_user_data(
+            static_cast<lv_obj_t*>(lv_event_get_target(e))));
+      },
+      LV_EVENT_DELETE, nullptr);
+
+  // Initial render + observe future registry changes.
+  list_rebuild_rows(lc);
+  notifications().on_change([lc]() { list_rebuild_rows(lc); });
+
+  return root;
+}
+
 }  // namespace
 
 lv_obj_t* build_widget(BuildCtx& ctx, JsonObjectConst spec,
@@ -945,6 +1161,7 @@ lv_obj_t* build_widget(BuildCtx& ctx, JsonObjectConst spec,
   if (t == "bar")      return build_bar(ctx, spec, err);
   if (t == "bargroup") return build_bargroup(ctx, spec, err);
   if (t == "button")   return build_button(ctx, spec, err);
+  if (t == "list")     return build_list(ctx, spec, err);
   *err = std::string("unknown widget kind: ") + t;
   return nullptr;
 }

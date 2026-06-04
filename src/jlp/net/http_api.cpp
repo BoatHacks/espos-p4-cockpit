@@ -261,7 +261,7 @@ esp_err_t hello_get(httpd_req_t* req) {
     case ApplySource::Boot: default: src_str = "boot";       break;
   }
   // Single buffer; widget catalog is small enough to inline.
-  char buf[1536];
+  char buf[1792];
   snprintf(buf, sizeof(buf),
       "{"
         "\"schema\":1,"
@@ -275,7 +275,8 @@ esp_err_t hello_get(httpd_req_t* req) {
           "\"arc\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\",\"min\",\"max\",\"start_angle\",\"end_angle\",\"ticks\",\"tick_labels\",\"bands\",\"bg_color\",\"fg_color\"]},"
           "\"bar\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\",\"min\",\"max\",\"vertical\",\"bg_color\",\"fg_color\"]},"
           "\"bargroup\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bars\",\"bg_color\",\"fg_color\"]},"
-          "\"button\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"press_value\",\"release_value\",\"hold_ms\",\"bg_color\",\"fg_color\"]}"
+          "\"button\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"press_value\",\"release_value\",\"hold_ms\",\"bg_color\",\"fg_color\"]},"
+          "\"list\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"max_rows\",\"row_height\",\"columns\",\"row_color_field\",\"bg_color\",\"fg_color\"]}"
         "},"
         "\"active_layout_name\":\"%s\","
         "\"layout_source\":\"%s\""

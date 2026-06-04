@@ -197,6 +197,15 @@ Displayed value = `(raw × scale) + offset`, formatted to `decimals`, then `unit
 - Renders the group caption (top-level `label`) at the top-left and lays out the bars in equal-width slots beneath. Each bar fills bottom-up; the per-bar `label` prints below it.
 - No top-level `bind` — the widget is a pure container. `bg_color` / `fg_color` apply to the container; per-sub-bar fill colors come from zones (or the theme accent fallback).
 
+#### `list`
+- Extra fields:
+  - `bind` (string, required) — in v1, only the literal `"notifications"` is supported (binds to the device's notifications-registry snapshot). Plain SK array paths land in v2.
+  - `max_rows` (int, default `8`) — cap on rows rendered.
+  - `row_height` (int, default `28`) — pixel height per row.
+  - `columns` (array, required) — each entry `{label, field, width?, format?}`. `field` is a dotted path into the row object (e.g. `path`, `state`, `message`). `format` is a printf-style template applied client-side (designer only; firmware shows raw text).
+  - `row_color_field` (string, optional) — name of a row field whose value names a zone state (`alert`/`warn`/`alarm`/`emergency`). When set, each row's background is tinted per the maritime palette. Use `"state"` to colour notification rows by severity.
+- Subscribes to the notifications registry; re-renders on every change. Caption (top-level `label`) sits above a column-header row; rows fill the rest of the tile bottom-up.
+
 #### `button`
 - Extra fields:
   - `bind` (string, required) — SK path to PUT.
