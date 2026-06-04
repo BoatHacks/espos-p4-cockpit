@@ -179,6 +179,9 @@ Displayed value = `(raw × scale) + offset`, formatted to `decimals`, then `unit
 - Extra fields:
   - `min`, `max` (float, required) — value range mapped to the arc sweep.
   - `start_angle` (int, default `135`), `end_angle` (int, default `45`) — degrees; 0° is east, sweep is clockwise.
+  - `ticks` (int, optional) — N evenly-spaced major tick marks around the arc. `0` or omitted = none.
+  - `tick_labels` (bool, optional, default `false`) — print min, max, and intermediate values next to each tick. Device firmware may omit labels for memory; the designer always shows them.
+  - `bands` (array, optional) — advisory colored ring painted **behind** the live indicator. Each entry is `{from, to, color}` where `from`/`to` are in display-space (after the widget's `display.scale` / `offset`) and `color` is a hex string. Bands and SK zones coexist: bands are author-defined "good/warn/critical" ranges; the indicator color still follows live SK zones.
 - Renders a circular arc forced into the largest square that fits inside `w × h`; caption (`label`) and formatted value are centred inside.
 - Subject kind: `Float`.
 

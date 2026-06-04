@@ -1,5 +1,7 @@
 #include "widget_factory.h"
 
+#include <math.h>
+
 #include "../net/sk_put.h"
 #include "../subject_registry.h"
 #include "../zone_registry.h"
@@ -379,18 +381,102 @@ lv_obj_t* build_arc(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   int box_w = spec["w"] | 120;
   int box_h = spec["h"] | 60;
   int side = box_w < box_h ? box_w : box_h;
+  int sa = spec["start_angle"] | 135;
+  int ea = spec["end_angle"] | 45;
+  float v_min = spec["min"] | 0.f;
+  float v_max = spec["max"] | 100.f;
+  Disp tmp_disp = parse_display(spec);
+
+  // Total sweep, normalised to 0..360. Bands map their (from, to)
+  // values into the same sweep.
+  int total_sweep = ea - sa;
+  if (total_sweep <= 0) total_sweep += 360;
+
+  // ---- Bands (advisory colored ring painted UNDER the indicator).
+  // Each band is its own lv_arc with no indicator and a thin track
+  // styled in the band's color. Created before the indicator so the
+  // indicator paints on top.
+  JsonArrayConst bands = spec["bands"];
+  if (!bands.isNull()) {
+    for (JsonObjectConst b : bands) {
+      float from = b["from"] | 0.f;
+      float to = b["to"] | 0.f;
+      const char* hex = b["color"] | "#3fb950";
+      if (to < from) { float t = to; to = from; from = t; }
+      // Map [from, to] in display-space back to arc angle range.
+      float span = v_max - v_min;
+      if (span <= 0) continue;
+      float t0 = (from * tmp_disp.scale + tmp_disp.offset - v_min) / span;
+      float t1 = (to   * tmp_disp.scale + tmp_disp.offset - v_min) / span;
+      if (t0 < 0) t0 = 0;
+      if (t1 > 1) t1 = 1;
+      if (t1 <= t0) continue;
+      int ang0 = sa + (int)(total_sweep * t0);
+      int ang1 = sa + (int)(total_sweep * t1);
+      uint32_t color = 0x3fb950;
+      parse_hex_color(hex, &color);
+
+      lv_obj_t* band = lv_arc_create(root);
+      lv_obj_set_size(band, side, side);
+      lv_obj_align(band, LV_ALIGN_CENTER, 0, 0);
+      lv_arc_set_bg_angles(band, ang0 % 360, ang1 % 360);
+      // Zero the indicator — we only want the bg ring visible.
+      lv_arc_set_angles(band, ang0 % 360, ang0 % 360);
+      lv_obj_remove_style(band, NULL, LV_PART_KNOB);
+      lv_obj_clear_flag(band, LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_set_style_arc_color(band, lv_color_hex(color), LV_PART_MAIN);
+      lv_obj_set_style_arc_width(band, 4, LV_PART_MAIN);
+    }
+  }
+
+  // ---- Tick marks (drawn via small line segments).
+  // Major ticks at evenly-spaced angles around the arc. No labels in
+  // v1 to keep the firmware light; designer can show tick numerals
+  // since SVG text is cheap on the browser.
+  int tick_count = spec["ticks"] | 0;
+  if (tick_count > 1) {
+    static lv_point_precise_t tick_pts[2];  // reused per tick
+    float r_outer = side / 2.0f;
+    float r_inner = r_outer - 6.0f;
+    if (r_inner < 0) r_inner = 0;
+    float cx = side / 2.0f;
+    float cy = side / 2.0f;
+    for (int i = 0; i < tick_count; i++) {
+      float t = (float)i / (float)(tick_count - 1);
+      float a = sa + total_sweep * t;
+      float rad = a * 3.14159265f / 180.0f;
+      // lv_line takes points relative to its parent; create a tiny
+      // 1x1 lv_line for each tick.
+      lv_obj_t* tick = lv_line_create(root);
+      tick_pts[0].x = (lv_value_precise_t)(cx + r_inner * cosf(rad)
+                                           + (box_w - side) / 2);
+      tick_pts[0].y = (lv_value_precise_t)(cy + r_inner * sinf(rad)
+                                           + (box_h - side) / 2);
+      tick_pts[1].x = (lv_value_precise_t)(cx + r_outer * cosf(rad)
+                                           + (box_w - side) / 2);
+      tick_pts[1].y = (lv_value_precise_t)(cy + r_outer * sinf(rad)
+                                           + (box_h - side) / 2);
+      lv_line_set_points(tick, tick_pts, 2);
+      lv_obj_set_style_line_color(tick, lv_color_hex(kMutedHex), LV_PART_MAIN);
+      lv_obj_set_style_line_width(tick, 1, LV_PART_MAIN);
+    }
+  }
+
   lv_obj_t* arc = lv_arc_create(root);
   lv_obj_set_size(arc, side, side);
   lv_obj_align(arc, LV_ALIGN_CENTER, 0, 0);
   lv_arc_set_range(arc, 0, kBarSteps);
-  int sa = spec["start_angle"] | 135;
-  int ea = spec["end_angle"] | 45;
   lv_arc_set_bg_angles(arc, sa, ea);
   lv_arc_set_angles(arc, sa, sa);
   lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
   lv_obj_clear_flag(arc, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_set_style_arc_color(arc, lv_color_hex(0x30363d), LV_PART_MAIN);
   lv_obj_set_style_arc_color(arc, lv_color_hex(kAccentHex), LV_PART_INDICATOR);
+  // Also lift the inactive bg arc above the bands so the bands sit
+  // visibly OUTSIDE rather than fighting the track. Re-pin the arc
+  // on top by setting it as the parent's last child via z-order:
+  lv_obj_move_foreground(arc);
+  (void)v_min; (void)v_max;  // captured by RangeBinding below
 
   auto* rb_arc = new RangeBinding{parse_display(spec),
                                   spec["min"] | 0.f, spec["max"] | 100.f,
