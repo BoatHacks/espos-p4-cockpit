@@ -31,6 +31,7 @@
 #include "jlp/net/mdns_announce.h"
 #include "jlp/status_overlay.h"
 #include "jlp/subject_registry.h"
+#include "jlp/notifications_registry.h"
 #include "jlp/zone_registry.h"
 
 using namespace sensesp;
@@ -89,6 +90,7 @@ void setup() {
   jlp::http_api_start(8081);
   jlp::mdns_announce_start(8081);
   jlp::zones().hook_sk_ws();
+  jlp::notifications().hook_sk_ws();
   jlp::layout_fetch_async_apply("192.168.0.148", 4100);
 
   // --- SK WS state into the overlay ---
