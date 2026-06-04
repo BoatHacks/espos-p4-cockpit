@@ -16,6 +16,9 @@ void NotificationsRegistry::apply(const std::string& path_after_prefix,
                                   const JsonVariantConst& value) {
   // Treat a null value (path cleared) as removal.
   if (value.isNull()) {
+    // A cleared path re-arms any local ack: if it fires again it
+    // should pop the overlay anew.
+    acked_.erase(path_after_prefix);
     if (map_.erase(path_after_prefix) > 0) {
       ESP_LOGI(TAG, "cleared %s", path_after_prefix.c_str());
       fire_observers();
@@ -29,12 +32,23 @@ void NotificationsRegistry::apply(const std::string& path_after_prefix,
 
   // Drop nominal/normal — they're "cleared" states in the SK convention.
   if (n.state == NotState::Nominal || n.state == NotState::Normal) {
+    acked_.erase(path_after_prefix);  // cleared -> re-arm
     if (map_.erase(path_after_prefix) > 0) {
       ESP_LOGI(TAG, "cleared %s (state=%s)", path_after_prefix.c_str(),
                not_state_name(n.state));
       fire_observers();
     }
     return;
+  }
+
+  // If a previously-acked notification escalates above the level it
+  // was acknowledged at, re-arm it so the overlay pops again.
+  auto ack_it = acked_.find(path_after_prefix);
+  if (ack_it != acked_.end() && n.state > ack_it->second) {
+    ESP_LOGI(TAG, "%s escalated %s -> %s, re-arming",
+             path_after_prefix.c_str(), not_state_name(ack_it->second),
+             not_state_name(n.state));
+    acked_.erase(ack_it);
   }
 
   auto it = map_.find(path_after_prefix);
@@ -52,6 +66,7 @@ void NotificationsRegistry::apply(const std::string& path_after_prefix,
 const Notification* NotificationsRegistry::most_severe() const {
   const Notification* best = nullptr;
   for (const auto& kv : map_) {
+    if (acked_.count(kv.first)) continue;  // locally acknowledged
     if (!best || kv.second.state > best->state) best = &kv.second;
   }
   return best;
@@ -60,12 +75,32 @@ const Notification* NotificationsRegistry::most_severe() const {
 std::vector<Notification> NotificationsRegistry::snapshot() const {
   std::vector<Notification> out;
   out.reserve(map_.size());
-  for (const auto& kv : map_) out.push_back(kv.second);
+  for (const auto& kv : map_) {
+    if (acked_.count(kv.first)) continue;  // locally acknowledged
+    out.push_back(kv.second);
+  }
   std::sort(out.begin(), out.end(),
             [](const Notification& a, const Notification& b) {
               return a.state > b.state;  // descending by severity
             });
   return out;
+}
+
+void NotificationsRegistry::acknowledge(const std::string& path_after_prefix) {
+  auto it = map_.find(path_after_prefix);
+  if (it == map_.end()) {
+    // Nothing tracked under this path; nothing to ack.
+    return;
+  }
+  acked_[path_after_prefix] = it->second.state;
+  ESP_LOGI(TAG, "acked %s (state=%s)", path_after_prefix.c_str(),
+           not_state_name(it->second.state));
+  fire_observers();
+}
+
+bool NotificationsRegistry::is_acknowledged(
+    const std::string& path_after_prefix) const {
+  return acked_.count(path_after_prefix) > 0;
 }
 
 void NotificationsRegistry::fire_observers() {

@@ -89,10 +89,17 @@ void AlertOverlay::init() {
       [](lv_event_t*) {
         AlertOverlay& self = alert_overlay();
         if (!self.current_path_.empty()) {
+          // Local ack: suppress this path in the registry so the
+          // overlay dismisses NOW and the device stays usable, even
+          // though the N2K bus keeps re-asserting the alarm. This
+          // fires on_change(), which rebuilds the overlay with the
+          // next pending notification (or hides it). Re-arms when the
+          // condition clears or escalates (see the registry).
+          notifications().acknowledge(self.current_path_);
+          // Best-effort: also tell SK we acknowledged. Harmless for
+          // bus-sourced alarms (they re-assert), and lets
+          // server-mediated/UI notifications clear properly.
           put_notification_ack(self.current_path_);
-          // Don't optimistically remove from the registry — the SK
-          // echo + the on_change observer below will rebuild the
-          // overlay with the next pending notification (or hide it).
         }
       },
       LV_EVENT_CLICKED, nullptr);

@@ -70,11 +70,27 @@ class NotificationsRegistry {
              const JsonVariantConst& value);
 
   /** Most severe currently-pending notification, or nullptr if all
-   *  are normal/nominal/cleared. */
+   *  are normal/nominal/cleared. Acknowledged notifications are
+   *  skipped (see acknowledge()). */
   const Notification* most_severe() const;
 
-  /** All currently-tracked notifications, sorted by severity descending. */
+  /** All currently-tracked notifications, sorted by severity
+   *  descending. Acknowledged notifications are excluded. */
   std::vector<Notification> snapshot() const;
+
+  /** Locally acknowledge a notification by path. The notification
+   *  stays in the registry (the bus condition is still live) but is
+   *  suppressed from most_severe()/snapshot() — so the alert overlay
+   *  dismisses and the device stays usable, regardless of whether the
+   *  alarm clears on the N2K bus. Fires on_change().
+   *
+   *  The ack auto-clears (the notification re-arms) when the path
+   *  goes to normal/nominal, OR when its state escalates above the
+   *  level it was acked at (e.g. alarm -> emergency re-pops). */
+  void acknowledge(const std::string& path_after_prefix);
+
+  /** True if `path` is currently acknowledged. */
+  bool is_acknowledged(const std::string& path_after_prefix) const;
 
   /** Register a change observer. Returns an opaque token; the caller
    *  must call `off_change(token)` before any captured pointer is
@@ -103,6 +119,10 @@ class NotificationsRegistry {
     Observer cb;
   };
   std::unordered_map<std::string, Notification> map_;
+  // Locally-acknowledged paths -> the severity they were acked at.
+  // Used to suppress the overlay while the bus keeps re-asserting,
+  // and to re-arm if the condition later escalates.
+  std::unordered_map<std::string, NotState> acked_;
   std::vector<Slot> observers_;
   ObserverToken next_token_ = 1;
 };
