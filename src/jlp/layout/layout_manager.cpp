@@ -5,6 +5,8 @@
 #include <unordered_set>
 #include "esp_log.h"
 
+#include "../alert_overlay.h"
+#include "../notifications_registry.h"
 #include "../status_overlay.h"
 #include "../subject_registry.h"
 #include "../widgets/widget_factory.h"
@@ -263,6 +265,17 @@ ApplyResult LayoutManager::apply(const std::string& json, ApplySource src) {
     overlay_visible = doc["status_overlay"];
   }
   overlay().set_visible(overlay_visible);
+
+  // Re-configure the alert overlay from the layout's top-level
+  // `notifications` block. Defaults: enabled + min_state alarm.
+  bool notif_enabled = true;
+  NotState notif_min = NotState::Alarm;
+  JsonObjectConst notif = doc["notifications"];
+  if (!notif.isNull()) {
+    if (notif["enabled"].is<bool>()) notif_enabled = notif["enabled"];
+    notif_min = parse_not_state(notif["min_state"] | "alarm");
+  }
+  alert_overlay().configure(notif_enabled, notif_min);
 
   lv_obj_t* old_root = current_root_;
   lv_obj_clear_flag(staging, LV_OBJ_FLAG_HIDDEN);

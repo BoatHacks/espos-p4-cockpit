@@ -259,6 +259,24 @@ over the same WebSocket as a SignalK REST request envelope. The device does **no
 
 The visual flips optimistically on tap and reconciles against the authoritative subscription value 500 ms later. If no echo lands in time the switch snaps back.
 
+## Alert overlay
+
+A layout-level setting (NOT a widget) configures a full-screen modal that the device pops above the active screen whenever SK delivers a notification with state >= a configured threshold.
+
+Top-level layout fields:
+
+| Field                    | Type   | Default       | Notes                                                  |
+|--------------------------|--------|---------------|--------------------------------------------------------|
+| `notifications.enabled`  | bool   | `true`        | Master switch for the overlay.                         |
+| `notifications.min_state`| string | `"alarm"`     | One of `alert` \| `warn` \| `alarm` \| `emergency`. Only notifications at or above this severity trigger the modal. |
+| `notifications.ack_method`| string | `"modal"`    | v1: `"modal"` only. Future versions may add `"toast"` for non-blocking auto-dismiss alerts. |
+
+The device subscribes to `notifications.*` (handled via SensESP's WS value callback) and consumes every delta. Notifications in `state: "normal"` / `"nominal"` are treated as cleared and removed from the registry. The most-severe pending notification at or above `min_state` is shown.
+
+ACK: tapping the on-screen ACK button PUTs the same notification path with `{value: {state: "normal", method: [], message: ""}}` — the SignalK convention. The server echoes the cleared state back to all clients; the overlay observes the registry change and either refills with the next-most-severe pending notification or hides.
+
+The overlay z-order is above the layout content AND above the status overlay strip, so an unacknowledged alarm always remains visible.
+
 ## Versioning
 
 Wire schema versions are integers. A schema change that breaks compatibility increments the integer; the device's `/hello.schema` is authoritative. Clients refuse to push to a device whose `schema` they don't understand.
