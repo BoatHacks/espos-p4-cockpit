@@ -282,7 +282,7 @@ Top-level layout fields:
 
 The device subscribes to `notifications.*` and consumes every delta. Notifications in `state: "normal"` / `"nominal"` are treated as cleared and removed from the registry. The most-severe pending notification at or above `min_state` is shown.
 
-ACK: tapping the on-screen ACK button PUTs the same notification path with `{value: {state: "normal", method: [], message: ""}}` — the SignalK convention. The server echoes the cleared state back to all clients; the overlay observes the registry change and either refills with the next-most-severe pending notification or hides.
+ACK: tapping the on-screen ACK button sends a SignalK delta over the WebSocket with `{updates: [{values: [{path: "notifications.<...>", value: {state: "normal", message: "", method: []}}]}]}`. signalk-server's `filterNotifications` interceptor routes the delta to its NotificationManager, which syncs the alarm's state to `normal`; the server then echoes the cleared state back to all clients (including ours). The overlay observes the registry change and either refills with the next-most-severe pending notification or hides. (Note: the server's modern notification API does NOT honour a REST/WS PUT-with-state-normal against the path directly — only the inbound-delta route is wired through.)
 
 The overlay z-order is above the layout content AND above the status overlay strip, so an unacknowledged alarm always remains visible.
 

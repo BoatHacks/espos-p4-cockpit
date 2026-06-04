@@ -5,6 +5,8 @@
 
 #include "esp_log.h"
 #include "sensesp/signalk/signalk_put_request.h"
+#include "sensesp/signalk/signalk_ws_client.h"
+#include "sensesp_app.h"
 
 static const char* TAG = "jlp.put";
 
@@ -56,51 +58,53 @@ void put_string(const std::string& path, const std::string& value) {
 }
 
 // ---- notification ACK ----
-
-namespace {
-
-// A bespoke SKPutRequest variant whose `value` field is a fixed
-// {state, method, message} object. SignalK's ACK convention is to PUT
-// to the same notification path with state="normal". One instance per
-// notification path is cached so we don't leak.
-class NotificationAckRequest : public sensesp::SKPutRequestBase {
- public:
-  explicit NotificationAckRequest(const String& path)
-      : sensesp::SKPutRequestBase(path, "", 5000) {}
-
-  void fire() {
-    if (request_pending()) {
-      ESP_LOGW(TAG, "ACK PUT pending for %s; dropping new request",
-               this->get_sk_path().c_str());
-      return;
-    }
-    send_put_request();
-  }
-
-  void set_put_value(JsonObject& put_data) override {
-    JsonObject v = put_data["value"].to<JsonObject>();
-    v["state"] = "normal";
-    v["message"] = "";
-    v["method"].to<JsonArray>();
-  }
-};
-
-std::unordered_map<std::string, NotificationAckRequest*> g_ack;
-
-}  // namespace
+//
+// SignalK PUT requests against notifications.* paths are NOT honored
+// by the server's PUT dispatcher — the modern notification API
+// (server-mediated alarms) routes ACKs via dedicated REST endpoints
+// keyed by the notification's UUID, not via PUTs to the path.
+//
+// However, the server's notification-handler interception path
+// (`filterNotifications` in signalk-server) DOES consume incoming
+// deltas on `notifications.*` paths and syncs the alarm's state to
+// the delta's `state` field. So injecting an inbound delta with
+// state="normal" achieves the same effect as the (now-non-existent)
+// PUT convention. We send the delta directly over the SK WebSocket
+// since it's already open.
 
 void put_notification_ack(const std::string& path_after_prefix) {
   std::string full = "notifications." + path_after_prefix;
-  ESP_LOGI(TAG, "ACK %s", full.c_str());
-  auto it = g_ack.find(full);
-  NotificationAckRequest* req;
-  if (it == g_ack.end()) {
-    req = new NotificationAckRequest(String(full.c_str()));
-    g_ack.emplace(full, req);
-  } else {
-    req = it->second;
+  ESP_LOGI(TAG, "ACK %s (delta state=normal)", full.c_str());
+
+  auto app = sensesp::SensESPApp::get();
+  if (!app) {
+    ESP_LOGW(TAG, "no SensESPApp — cannot send ACK delta");
+    return;
   }
-  req->fire();
+  auto ws = app->get_ws_client();
+  if (!ws) {
+    ESP_LOGW(TAG, "no WS client — cannot send ACK delta");
+    return;
+  }
+
+  // {updates: [{values: [{path: <full>, value: {state: "normal",
+  //   message: "", method: []}}]}]}
+  // No context — the server fills "vessels.self" for self-deltas.
+  JsonDocument doc;
+  JsonObject root = doc.to<JsonObject>();
+  JsonArray updates = root["updates"].to<JsonArray>();
+  JsonObject update = updates.add<JsonObject>();
+  JsonArray values = update["values"].to<JsonArray>();
+  JsonObject v = values.add<JsonObject>();
+  v["path"] = full;
+  JsonObject val = v["value"].to<JsonObject>();
+  val["state"] = "normal";
+  val["message"] = "";
+  val["method"].to<JsonArray>();
+
+  String s;
+  serializeJson(doc, s);
+  ws->sendTXT(s);
 }
 
 }  // namespace jlp
