@@ -75,8 +75,11 @@ class NotificationsRegistry {
   const Notification* most_severe() const;
 
   /** All currently-tracked notifications, sorted by severity
-   *  descending. Acknowledged notifications are excluded. */
-  std::vector<Notification> snapshot() const;
+   *  descending. Acknowledged notifications are excluded.
+   *  By default skips cleared (normal/nominal) entries since the
+   *  registry doesn't track them anyway; set `include_cleared` to
+   *  true once we start retaining cleared rows for audit views. */
+  std::vector<Notification> snapshot(bool include_cleared = false) const;
 
   /** Locally acknowledge a notification by path. The notification
    *  stays in the registry (the bus condition is still live) but is

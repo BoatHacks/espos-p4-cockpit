@@ -974,6 +974,7 @@ struct ListCtx {
   lv_obj_t* tile;          // parent container, holds rows below header
   lv_obj_t* rows_box;      // child container we recycle on each rebuild
   int header_h;
+  bool include_cleared;    // show normal/nominal rows too (audit view)
   NotificationsRegistry::ObserverToken obs_token;
 };
 
@@ -1003,7 +1004,7 @@ uint32_t row_color_for(const std::string& state_token) {
 void list_rebuild_rows(ListCtx* lc) {
   // Clear existing children of rows_box.
   lv_obj_clean(lc->rows_box);
-  auto rows = notifications().snapshot();
+  auto rows = notifications().snapshot(lc->include_cleared);
   int max_rows = lc->max_rows > 0 ? lc->max_rows : 8;
   int count = (int)rows.size();
   if (count > max_rows) count = max_rows;
@@ -1113,6 +1114,7 @@ lv_obj_t* build_list(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   lc->row_color_field = spec["row_color_field"] | "";
   lc->colors = colors;
   lc->header_h = header_h + 20;
+  lc->include_cleared = spec["include_cleared"] | false;
 
   int x = 0;
   for (JsonObjectConst c : columns) {

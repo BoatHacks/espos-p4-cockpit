@@ -204,6 +204,7 @@ Displayed value = `(raw × scale) + offset`, formatted to `decimals`, then `unit
   - `row_height` (int, default `28`) — pixel height per row.
   - `columns` (array, required) — each entry `{label, field, width?, format?}`. `field` is a dotted path into the row object (e.g. `path`, `state`, `message`). `format` is a printf-style template applied client-side (designer only; firmware shows raw text).
   - `row_color_field` (string, optional) — name of a row field whose value names a zone state (`alert`/`warn`/`alarm`/`emergency`). When set, each row's background is tinted per the maritime palette. Use `"state"` to colour notification rows by severity.
+  - `include_cleared` (bool, default `false`) — when bound to `"notifications"`, include rows in cleared states (`normal` / `nominal`) as well. Default is **pending only** so the list matches the device's "what needs attention" view; set `true` for an audit-style snapshot of every known notification path.
 - Subscribes to the notifications registry; re-renders on every change. Caption (top-level `label`) sits above a column-header row; rows fill the rest of the tile bottom-up.
 
 #### `button`
