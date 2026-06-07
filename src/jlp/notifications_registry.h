@@ -28,7 +28,11 @@ inline NotState parse_not_state(const char* s) {
   if (!strcmp(s, "nominal"))   return NotState::Nominal;
   if (!strcmp(s, "normal"))    return NotState::Normal;
   if (!strcmp(s, "alert"))     return NotState::Alert;
+  // SK sources in the wild emit both "warn" (spec) and "warning"
+  // (older convention); accept either. Designer normalises the
+  // same way in fetchNotifications().
   if (!strcmp(s, "warn"))      return NotState::Warn;
+  if (!strcmp(s, "warning"))   return NotState::Warn;
   if (!strcmp(s, "alarm"))     return NotState::Alarm;
   if (!strcmp(s, "emergency")) return NotState::Emergency;
   return NotState::Normal;
