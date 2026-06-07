@@ -1067,19 +1067,12 @@ void list_rebuild_rows(ListCtx* lc) {
   }
 }
 
-lv_obj_t* build_list(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
+lv_obj_t* build_notifications(BuildCtx& ctx, JsonObjectConst spec,
+                              std::string* err) {
   const Colors colors = parse_colors(spec);
-  const char* bind = spec["bind"] | (const char*)nullptr;
-  if (!bind) { *err = "list: bind required"; return nullptr; }
-  if (strcmp(bind, "notifications") != 0) {
-    *err = std::string("list: bind \"") + bind +
-           "\" not supported in v1 (only \"notifications\")";
-    return nullptr;
-  }
-
   JsonArrayConst columns = spec["columns"];
   if (columns.isNull() || columns.size() == 0) {
-    *err = "list: columns[] required";
+    *err = "notifications: columns[] required";
     return nullptr;
   }
 
@@ -1201,7 +1194,7 @@ lv_obj_t* build_widget(BuildCtx& ctx, JsonObjectConst spec,
   if (t == "bar")      return build_bar(ctx, spec, err);
   if (t == "bargroup") return build_bargroup(ctx, spec, err);
   if (t == "button")   return build_button(ctx, spec, err);
-  if (t == "list")     return build_list(ctx, spec, err);
+  if (t == "notifications") return build_notifications(ctx, spec, err);
   *err = std::string("unknown widget kind: ") + t;
   return nullptr;
 }

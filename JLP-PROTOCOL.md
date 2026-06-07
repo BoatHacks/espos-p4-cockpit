@@ -197,15 +197,24 @@ Displayed value = `(raw × scale) + offset`, formatted to `decimals`, then `unit
 - Renders the group caption (top-level `label`) at the top-left and lays out the bars in equal-width slots beneath. Each bar fills bottom-up; the per-bar `label` prints below it.
 - No top-level `bind` — the widget is a pure container. `bg_color` / `fg_color` apply to the container; per-sub-bar fill colors come from zones (or the theme accent fallback).
 
-#### `list`
+#### `notifications`
+- Tabular viewer for the device's notifications registry (the set of
+  `notifications.*` paths the device has seen, with their current
+  `{state, message}`). No `bind` field — the data source is always
+  the notifications registry.
 - Extra fields:
-  - `bind` (string, required) — in v1, only the literal `"notifications"` is supported (binds to the device's notifications-registry snapshot). Plain SK array paths land in v2.
   - `max_rows` (int, default `8`) — cap on rows rendered.
-  - `row_height` (int, default `28`) — pixel height per row.
-  - `columns` (array, required) — each entry `{label, field, width?, format?}`. `field` is a dotted path into the row object (e.g. `path`, `state`, `message`). `format` is a printf-style template applied client-side (designer only; firmware shows raw text).
-  - `row_color_field` (string, optional) — name of a row field whose value names a zone state (`alert`/`warn`/`alarm`/`emergency`). When set, each row's background is tinted per the maritime palette. Use `"state"` to colour notification rows by severity.
-  - `include_cleared` (bool, default `false`) — when bound to `"notifications"`, include rows in cleared states (`normal` / `nominal`) as well. Default is **pending only** so the list matches the device's "what needs attention" view; set `true` for an audit-style snapshot of every known notification path.
-- Subscribes to the notifications registry; re-renders on every change. Caption (top-level `label`) sits above a column-header row; rows fill the rest of the tile bottom-up.
+  - `row_height` (int, default `28`) — pixel height per row. When the
+    rendered rows exceed the tile geometry, the body scrolls
+    vertically (touch-drag on the device).
+  - `columns` (array, required) — each entry `{label, field, width?, format?}`. `field` is a dotted path into the row object (`path`, `state`, `message`, `createdAt`). `format` is a printf-style template applied client-side (designer only; firmware shows raw text).
+  - `row_color_field` (string, optional) — name of a row field whose value names a notification state (`alert`/`warn`/`alarm`/`emergency`, and optionally `normal`/`nominal` when `include_cleared` is set). When set, each row's background is tinted per the maritime palette and the row text auto-flips to dark for legibility.
+  - `include_cleared` (bool, default `false`) — include rows in cleared states (`normal` / `nominal`) as well. Default is **pending only** so the list matches the device's "what needs attention" view; set `true` for an audit-style snapshot of every known notification path.
+- Re-renders on every notification-registry change. Rows are sorted
+  by severity descending (emergency / alarm / warn / alert /
+  normal / nominal), so anything that needs attention floats to
+  the top. Caption (top-level `label`) sits above a column-header
+  row; rows fill the rest of the tile.
 
 #### `button`
 - Extra fields:

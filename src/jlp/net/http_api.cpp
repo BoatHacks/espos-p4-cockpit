@@ -276,7 +276,7 @@ esp_err_t hello_get(httpd_req_t* req) {
           "\"bar\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\",\"min\",\"max\",\"vertical\",\"bg_color\",\"fg_color\"]},"
           "\"bargroup\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bars\",\"bg_color\",\"fg_color\"]},"
           "\"button\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"press_value\",\"release_value\",\"hold_ms\",\"bg_color\",\"fg_color\"]},"
-          "\"list\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"max_rows\",\"row_height\",\"columns\",\"row_color_field\",\"include_cleared\",\"bg_color\",\"fg_color\"]}"
+          "\"notifications\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"max_rows\",\"row_height\",\"columns\",\"row_color_field\",\"include_cleared\",\"bg_color\",\"fg_color\"]}"
         "},"
         "\"active_layout_name\":\"%s\","
         "\"layout_source\":\"%s\""
