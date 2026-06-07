@@ -1001,6 +1001,21 @@ uint32_t row_color_for(const std::string& state_token) {
   return 0x161b22;
 }
 
+// Pick a contrasting text color for a row given its background.
+// Light theme bg keeps the configured fg; tinted (state-coded) rows
+// take dark text so the bright palette stays legible.
+uint32_t row_text_color_for(uint32_t row_bg, uint32_t default_fg) {
+  // The default tile bg is dark; any other color in our palette is
+  // bright. A simple luminance test is more robust than enumerating
+  // the palette since bg_color overrides can also be bright.
+  uint32_t r = (row_bg >> 16) & 0xFF;
+  uint32_t g = (row_bg >> 8) & 0xFF;
+  uint32_t b = row_bg & 0xFF;
+  // ITU-R BT.601 perceived brightness.
+  uint32_t y = (r * 299 + g * 587 + b * 114) / 1000;
+  return y >= 128 ? 0x0d1117 : default_fg;
+}
+
 void list_rebuild_rows(ListCtx* lc) {
   // Clear existing children of rows_box.
   lv_obj_clean(lc->rows_box);
@@ -1027,12 +1042,12 @@ void list_rebuild_rows(ListCtx* lc) {
     }
     lv_obj_set_style_bg_color(row, lv_color_hex(bg), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(row, LV_OPA_COVER, LV_PART_MAIN);
+    uint32_t fg = row_text_color_for(bg, lc->colors.fg);
 
     int x = 0;
     for (const ListColumn& col : lc->columns) {
       lv_obj_t* cell = lv_label_create(row);
-      lv_obj_set_style_text_color(cell, lv_color_hex(lc->colors.fg),
-                                  LV_PART_MAIN);
+      lv_obj_set_style_text_color(cell, lv_color_hex(fg), LV_PART_MAIN);
       lv_obj_set_style_text_font(cell, &lv_font_montserrat_14, LV_PART_MAIN);
       lv_obj_set_pos(cell, x, 4);
       lv_obj_set_width(cell, col.width);
@@ -1135,6 +1150,10 @@ lv_obj_t* build_list(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   }
 
   // Rows container — replaced wholesale on each registry change.
+  // Vertical-only scroll so the operator can touch-drag through more
+  // notifications than fit in the visible area. max_rows still caps
+  // the number actually rendered (memory bound); when geometry is
+  // smaller than max_rows × row_height the remainder scrolls.
   lv_obj_t* rows_box = lv_obj_create(root);
   lv_obj_set_size(rows_box, lv_pct(100),
                   (spec["h"] | 60) - lc->header_h - 16);
@@ -1144,6 +1163,8 @@ lv_obj_t* build_list(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   lv_obj_set_style_outline_width(rows_box, 0, LV_PART_MAIN);
   lv_obj_set_style_shadow_width(rows_box, 0, LV_PART_MAIN);
   lv_obj_set_style_pad_all(rows_box, 0, LV_PART_MAIN);
+  lv_obj_set_scroll_dir(rows_box, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(rows_box, LV_SCROLLBAR_MODE_AUTO);
   lc->rows_box = rows_box;
 
   // Stash ctx; deregister the observer + free on delete (the
