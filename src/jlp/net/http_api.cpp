@@ -5,6 +5,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "esp_heap_caps.h"
+#include "esp_jpeg_enc.h"
+#include "esp_timer.h"
 #include "lvgl.h"
 #include "sensesp.h"
 #include <cstring>
@@ -106,14 +108,19 @@ esp_err_t healthz_get(httpd_req_t* req) {
 
 // --- screenshot endpoint -------------------------------------------------
 //
-// GET /screenshot returns a 16-bit BMP of the current LVGL active screen.
-// BMP because browsers decode it natively (no firmware-side PNG/JPEG
-// dep) and it's tiny to encode — just a 70-byte header + raw pixels.
-// Cost on the wire: width * height * 2 + 70 bytes (~1.2 MB at 1024x600).
+// GET /screenshot                — JPEG (default; cheap enough for the
+//                                  designer's live-mirror poll).
+// GET /screenshot?fmt=bmp        — 16-bit BMP, raw RGB565. Larger and
+//                                  slower (~1.2 MB at 1024x600, ~6 s
+//                                  over esp_hosted SDIO) but
+//                                  bit-perfect and decodes natively in
+//                                  any browser; kept for debug diffs.
+// GET /screenshot?fmt=jpeg       — explicit JPEG; same as no arg.
 //
-// Slow over esp_hosted SDIO (~6s). Acceptable for a manual debug
-// trigger; if we ever want continuous we'd switch to JPEG via P4's
-// hardware encoder.
+// JPEG uses the espressif/esp_new_jpeg software encoder (no HW JPEG on
+// P4 today). RGB565 → JPEG at quality 70 is ~30-50 KB for our 1024×600
+// frame and encodes in well under a second, which is fast enough for
+// 1-2 fps polling from the designer.
 
 // Builds a 70-byte BMP header for a width*height image stored as
 // 16-bit RGB565 with bit masks. BMP rows are bottom-up.
@@ -197,7 +204,98 @@ static void take_screenshot(ScreenshotResult* out) {
   out->ok = true;
 }
 
+// Encode the captured RGB565 frame to JPEG. Returns the encoded bytes in
+// `out` on success. The encoder is opened/closed per call: encode is
+// >100 ms vs ~1 ms open/close, and statelessness keeps things safe
+// across concurrent /screenshot requests.
+//
+// The precompiled esp_new_jpeg blob shipped for P4 only accepts
+// JPEG_PIXEL_FORMAT_RGB888 input (RGB565_LE errors with "src type
+// error" at jpeg_enc_open). Convert RGB565 → RGB888 in PSRAM before
+// encoding; the conversion is ~1.8 MB for a 1024x600 frame and runs in
+// under 10 ms.
+static bool encode_rgb565_to_jpeg(const ScreenshotResult& src,
+                                  std::vector<uint8_t>* out,
+                                  std::string* err) {
+  const size_t px_count = (size_t)src.w * src.h;
+  const size_t rgb888_size = px_count * 3;
+  uint8_t* rgb888 =
+      (uint8_t*)heap_caps_malloc(rgb888_size, MALLOC_CAP_SPIRAM);
+  if (!rgb888) {
+    *err = "rgb888 PSRAM alloc failed";
+    return false;
+  }
+  // RGB565 little-endian → RGB888. LVGL writes pixels low-byte first,
+  // and the bits are R[15..11] G[10..5] B[4..0]. We expand 5/6/5 to
+  // 8/8/8 with bit replication (the standard way: copy the top bits
+  // into the low bits so 0x1F maps to 0xFF rather than 0xF8).
+  const uint8_t* p = src.pixels.data();
+  uint8_t* q = rgb888;
+  for (size_t i = 0; i < px_count; ++i) {
+    const uint16_t v = (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+    const uint8_t r5 = (v >> 11) & 0x1F;
+    const uint8_t g6 = (v >>  5) & 0x3F;
+    const uint8_t b5 =  v        & 0x1F;
+    q[0] = (uint8_t)((r5 << 3) | (r5 >> 2));
+    q[1] = (uint8_t)((g6 << 2) | (g6 >> 4));
+    q[2] = (uint8_t)((b5 << 3) | (b5 >> 2));
+    p += 2;
+    q += 3;
+  }
+
+  jpeg_enc_config_t cfg = DEFAULT_JPEG_ENC_CONFIG();
+  cfg.width       = (int)src.w;
+  cfg.height      = (int)src.h;
+  cfg.src_type    = JPEG_PIXEL_FORMAT_RGB888;
+  cfg.subsampling = JPEG_SUBSAMPLE_420;
+  cfg.quality     = 70;
+  jpeg_enc_handle_t enc = nullptr;
+  if (jpeg_enc_open(&cfg, &enc) != JPEG_ERR_OK || !enc) {
+    heap_caps_free(rgb888);
+    *err = "jpeg_enc_open failed";
+    return false;
+  }
+  // JPEG output cannot exceed the raw RGB888 size in practice; size the
+  // sink to that as a safe upper bound.
+  uint8_t* sink =
+      (uint8_t*)heap_caps_malloc(rgb888_size, MALLOC_CAP_SPIRAM);
+  if (!sink) {
+    jpeg_enc_close(enc);
+    heap_caps_free(rgb888);
+    *err = "jpeg sink PSRAM alloc failed";
+    return false;
+  }
+  int written = 0;
+  jpeg_error_t rc =
+      jpeg_enc_process(enc, rgb888, (int)rgb888_size,
+                       sink, (int)rgb888_size, &written);
+  jpeg_enc_close(enc);
+  heap_caps_free(rgb888);
+  if (rc != JPEG_ERR_OK || written <= 0) {
+    heap_caps_free(sink);
+    *err = std::string("jpeg_enc_process rc=") + std::to_string((int)rc);
+    return false;
+  }
+  out->assign(sink, sink + written);
+  heap_caps_free(sink);
+  return true;
+}
+
 esp_err_t screenshot_get(httpd_req_t* req) {
+  // Pick format from `?fmt=`. Default jpeg — that's what the designer's
+  // live mirror polls. Anything not "bmp" falls through to jpeg.
+  bool want_bmp = false;
+  size_t qlen = httpd_req_get_url_query_len(req);
+  if (qlen > 0 && qlen < 64) {
+    char query[64];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+      char fmt[16] = {};
+      if (httpd_query_key_value(query, "fmt", fmt, sizeof(fmt)) == ESP_OK) {
+        if (strcmp(fmt, "bmp") == 0) want_bmp = true;
+      }
+    }
+  }
+
   auto result = std::make_shared<ScreenshotResult>();
   SemaphoreHandle_t done = xSemaphoreCreateBinary();
   if (!done) {
@@ -224,27 +322,49 @@ esp_err_t screenshot_get(httpd_req_t* req) {
   }
 
   const uint32_t w = result->w, h = result->h;
-  const uint32_t row_bytes = w * 2;
-  uint8_t header[70];
-  bmp_header_rgb565(header, w, h);
-
-  httpd_resp_set_type(req, "image/bmp");
   httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-  if (httpd_resp_send_chunk(req, (const char*)header, sizeof(header)) !=
-      ESP_OK) {
-    return ESP_FAIL;
-  }
-  // BMP rows are bottom-up; LVGL gives top-down. Send last row first.
-  for (int32_t y = (int32_t)h - 1; y >= 0; --y) {
-    const char* row =
-        reinterpret_cast<const char*>(&result->pixels[y * row_bytes]);
-    if (httpd_resp_send_chunk(req, row, row_bytes) != ESP_OK) {
+
+  if (want_bmp) {
+    const uint32_t row_bytes = w * 2;
+    uint8_t header[70];
+    bmp_header_rgb565(header, w, h);
+    httpd_resp_set_type(req, "image/bmp");
+    if (httpd_resp_send_chunk(req, (const char*)header, sizeof(header)) !=
+        ESP_OK) {
       return ESP_FAIL;
     }
+    // BMP rows are bottom-up; LVGL gives top-down. Send last row first.
+    for (int32_t y = (int32_t)h - 1; y >= 0; --y) {
+      const char* row =
+          reinterpret_cast<const char*>(&result->pixels[y * row_bytes]);
+      if (httpd_resp_send_chunk(req, row, row_bytes) != ESP_OK) {
+        return ESP_FAIL;
+      }
+    }
+    httpd_resp_send_chunk(req, nullptr, 0);
+    ESP_LOGI(TAG, "screenshot[bmp] %ux%u (%u bytes)", (unsigned)w,
+             (unsigned)h, (unsigned)(70 + row_bytes * h));
+    return ESP_OK;
   }
-  httpd_resp_send_chunk(req, nullptr, 0);  // end chunked transfer
-  ESP_LOGI(TAG, "screenshot served %ux%u (%u bytes)", (unsigned)w,
-           (unsigned)h, (unsigned)(70 + row_bytes * h));
+
+  // JPEG path.
+  std::vector<uint8_t> jpeg_out;
+  std::string err;
+  const int64_t t0 = esp_timer_get_time();
+  if (!encode_rgb565_to_jpeg(*result, &jpeg_out, &err)) {
+    httpd_resp_set_status(req, "500 Internal Server Error");
+    httpd_resp_sendstr(req, err.c_str());
+    return ESP_OK;
+  }
+  const int64_t t1 = esp_timer_get_time();
+  httpd_resp_set_type(req, "image/jpeg");
+  if (httpd_resp_send(req, (const char*)jpeg_out.data(),
+                      jpeg_out.size()) != ESP_OK) {
+    return ESP_FAIL;
+  }
+  ESP_LOGI(TAG, "screenshot[jpeg] %ux%u (%u bytes, encode %lld ms)",
+           (unsigned)w, (unsigned)h, (unsigned)jpeg_out.size(),
+           (long long)((t1 - t0) / 1000));
   return ESP_OK;
 }
 
@@ -278,6 +398,7 @@ esp_err_t hello_get(httpd_req_t* req) {
           "\"button\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"press_value\",\"release_value\",\"hold_ms\",\"bg_color\",\"fg_color\"]},"
           "\"notifications\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"max_rows\",\"row_height\",\"columns\",\"row_color_field\",\"include_cleared\",\"bg_color\",\"fg_color\"]}"
         "},"
+        "\"screenshot\":{\"formats\":[\"jpeg\",\"bmp\"]},"
         "\"active_layout_name\":\"%s\","
         "\"layout_source\":\"%s\""
       "}",
