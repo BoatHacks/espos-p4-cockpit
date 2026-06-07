@@ -481,6 +481,14 @@ lv_obj_t* build_arc(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   lv_obj_clear_flag(arc, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_set_style_arc_color(arc, lv_color_hex(0x30363d), LV_PART_MAIN);
   lv_obj_set_style_arc_color(arc, lv_color_hex(kAccentHex), LV_PART_INDICATOR);
+  // Pin the arc track + indicator width to ~8% of the arc side so the
+  // device matches the designer's SVG (stroke=8 in a 100-unit
+  // viewBox). LVGL 9's default theme uses a fixed ~25 px which
+  // overshadows small arcs and makes adjacent arcs visually collide
+  // even when the layout coords don't overlap.
+  const int arc_stroke = side / 12;  // ~8%
+  lv_obj_set_style_arc_width(arc, arc_stroke, LV_PART_MAIN);
+  lv_obj_set_style_arc_width(arc, arc_stroke, LV_PART_INDICATOR);
   // Also lift the inactive bg arc above the bands so the bands sit
   // visibly OUTSIDE rather than fighting the track. Re-pin the arc
   // on top by setting it as the parent's last child via z-order:
