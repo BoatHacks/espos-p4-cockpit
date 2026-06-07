@@ -79,11 +79,21 @@ void setup() {
   // to. (SensESP subscribes once at on_connected; listeners added
   // later are silently ignored until reconnect — so we only pay the
   // reconnect cost when there's a real subscription gap.)
+  //
+  // Deferred to a fresh event_loop tick so the apply() that invoked
+  // us can return to the HTTP task and signal its done-semaphore
+  // *before* we start tearing down the WS. ws->restart() is
+  // synchronous and can take several seconds on cold reconnect; if
+  // we ran it inline, POST /layout would 504 on every first-push-
+  // after-boot (the only case that introduces a brand-new path set
+  // relative to the empty known_paths_ map).
   jlp::layout_manager().set_post_swap_hook(
       [app](bool new_paths_introduced) {
         if (!new_paths_introduced) return;
-        auto ws = app->get_ws_client();
-        if (ws) ws->restart();
+        sensesp::event_loop()->onDelay(0, [app]() {
+          auto ws = app->get_ws_client();
+          if (ws) ws->restart();
+        });
       });
 
   remote_log_start(2323);
