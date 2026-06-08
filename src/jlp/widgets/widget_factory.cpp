@@ -759,6 +759,15 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
     };
     std::string min_text = fmt_tick(v_min);
     std::string max_text = fmt_tick(v_max);
+    // Suffix the unit onto the MAX tick so the operator sees the
+    // scale + unit in one read ("8000 W") without needing a
+    // dedicated unit label. Keeps the right-of-bar column compact
+    // and avoids the unit-vs-0-baseline collision that used to
+    // suppress the unit entirely on signed ranges.
+    if (d.unit[0]) {
+      max_text += " ";
+      max_text += d.unit;
+    }
     // Resize bar dynamically per-cell: longer tick text (negatives,
     // 4+ digit values) needs more reserve. ~7 px per char in
     // Montserrat 14.
@@ -846,20 +855,10 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
     lv_label_set_text(min_tick, min_text.c_str());
     lv_obj_set_pos(min_tick, tick_x, cell_y + bar_h - 16);
     lv_obj_set_height(min_tick, 16);
-    // Unit label between min and max ticks, vertically centered on
-    // the bar's mid (only when there's a unit, no zero label is
-    // taking the same spot, and enough vertical space to avoid
-    // overlapping the ticks).
-    if (d.unit[0] && bar_h >= 60 && !signed_range) {
-      lv_obj_t* unit_label = lv_label_create(root);
-      lv_obj_set_style_text_color(unit_label, lv_color_hex(kMutedHex),
-                                  LV_PART_MAIN);
-      lv_obj_set_style_text_font(unit_label, &lv_font_montserrat_14,
-                                 LV_PART_MAIN);
-      lv_label_set_text(unit_label, d.unit);
-      lv_obj_set_pos(unit_label, tick_x, cell_y + bar_h / 2 - 8);
-      lv_obj_set_width(unit_label, tick_w);
-    }
+    // Unit lives at the end of the max tick text (set above) so
+    // there's no separate label to position. Avoids overlap with
+    // the "0" baseline label on signed ranges.
+    (void)tick_w;
 
     auto* bcb = new BarCellBinding{
         RangeBinding{d, v_min, v_max, colors}, val_label};
