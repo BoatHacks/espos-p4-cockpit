@@ -664,6 +664,18 @@ lv_obj_t* build_bar(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
 // own SK-zone tinting from the live registry. The container handles
 // caption + horizontal layout; each sub-bar reuses the RangeBinding
 // observer pattern from build_bar.
+//
+// Per-cell layout (top→bottom):
+//   - max-value tick (small, top-right of the bar track)
+//   - bar track (rectangle, fills bottom-up, zone-tinted)
+//     * live value text centered on the bar (white-on-tint)
+//   - min-value tick (small, bottom-right of the bar track)
+//   - per-bar caption (centered under the cell)
+struct BarCellBinding {
+  RangeBinding range;       // existing range/zone wiring reused
+  lv_obj_t* value_label;    // live formatted value drawn on the bar
+};
+
 lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
                          std::string* err) {
   const Colors colors = parse_colors(spec);
@@ -700,14 +712,21 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
 
   // Per-bar geometry: equal slots across the inner width, beneath
   // the caption. Each cell has a vertical bar that fills its track
-  // from the bottom, with a small bar label below it.
+  // from the bottom plus a label below. Side ticks for min/max go
+  // alongside the bar on the right (when there's room).
   int inner_w = (spec["w"] | 120) - 16;        // pad_all=8
   int inner_h = (spec["h"] | 60) - 16 - caption_h;
   int n = (int)bars.size();
   if (n <= 0) n = 1;
   int slot_w = inner_w / n;
-  int bar_w = slot_w - 8;
-  if (bar_w < 12) bar_w = 12;
+  // Reserve ~26 px on the right of the bar for tick labels (min/max).
+  constexpr int kTickReserve = 28;
+  // Bar width is ~half the slot so it stays clearly rectangular and
+  // leaves room for the scale labels. Floor at 14 px so the bar is
+  // never thinner than a finger-tip indicator.
+  int bar_w = slot_w - kTickReserve - 6;
+  if (bar_w < 14) bar_w = 14;
+  if (bar_w > slot_w - 12) bar_w = slot_w - 12;
   int bar_h = inner_h - 24;  // label below
   if (bar_h < 20) bar_h = 20;
 
@@ -722,7 +741,8 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
     }
     ctx.live_paths.insert(b_path);
 
-    int cell_x = slot_w * idx + (slot_w - bar_w) / 2;
+    // Bar sits on the LEFT of the cell; ticks fill the right gap.
+    int cell_x = slot_w * idx + 2;
     int cell_y = caption_h;
 
     lv_obj_t* bar = lv_bar_create(root);
@@ -731,6 +751,11 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
     lv_bar_set_range(bar, 0, kBarSteps);
     lv_obj_set_style_bg_color(bar, lv_color_hex(0x30363d), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
+    // LVGL's default theme uses LV_RADIUS_CIRCLE on bars, which turns
+    // small near-square bars into pills/circles. Force a small fixed
+    // radius so the bar reads as a rectangle at every aspect.
+    lv_obj_set_style_radius(bar, 3, LV_PART_MAIN);
+    lv_obj_set_style_radius(bar, 3, LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(bar, lv_color_hex(kAccentHex), LV_PART_INDICATOR);
     lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
     // Vertical: lv_bar's default mode is horizontal; size+orientation
@@ -738,7 +763,19 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
     // from the top by default — we want bottom-up.
     lv_bar_set_orientation(bar, LV_BAR_ORIENTATION_VERTICAL);
 
-    // Build a RangeBinding from the sub-bar spec.
+    // Live value text drawn ON the bar (centered).
+    lv_obj_t* val_label = lv_label_create(root);
+    lv_obj_set_style_text_color(val_label, lv_color_hex(0xffffff), LV_PART_MAIN);
+    lv_obj_set_style_text_font(val_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_label_set_text(val_label, "—");
+    lv_obj_set_width(val_label, bar_w);
+    lv_obj_set_style_text_align(val_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_pos(val_label, cell_x, cell_y + bar_h / 2 - 8);
+
+    // Min/max tick labels on the right of the bar. Use the formatted
+    // display value (scale+offset+decimals+unit) so the operator
+    // sees the range in their preferred units, matching the live
+    // value text.
     Disp d{1.f, 0.f, 0, "", ""};
     JsonObjectConst display = bspec["display"];
     if (!display.isNull()) {
@@ -748,13 +785,54 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
       snprintf(d.unit, sizeof(d.unit), "%s", display["unit"] | "");
     }
     snprintf(d.path, sizeof(d.path), "%s", b_path);
-    auto* rb = new RangeBinding{d, bspec["min"] | 0.f, bspec["max"] | 100.f,
-                                colors};
-    lv_obj_set_user_data(bar, rb);
+    float v_min = bspec["min"] | 0.f;
+    float v_max = bspec["max"] | 100.f;
+    auto fmt_tick = [&](float v) {
+      char buf[24];
+      // The range fields are in display-space already (matches the
+      // standalone bar widget convention) — don't re-apply scale.
+      snprintf(buf, sizeof(buf), "%.*f", d.decimals, v);
+      return std::string(buf);
+    };
+    int tick_x = cell_x + bar_w + 4;
+    int tick_w = slot_w - bar_w - 6;
+    lv_obj_t* max_tick = lv_label_create(root);
+    lv_obj_set_style_text_color(max_tick, lv_color_hex(kMutedHex),
+                                LV_PART_MAIN);
+    lv_obj_set_style_text_font(max_tick, &lv_font_montserrat_14,
+                               LV_PART_MAIN);
+    lv_label_set_text(max_tick, fmt_tick(v_max).c_str());
+    lv_obj_set_pos(max_tick, tick_x, cell_y - 2);
+    lv_obj_set_width(max_tick, tick_w);
+    lv_obj_t* min_tick = lv_label_create(root);
+    lv_obj_set_style_text_color(min_tick, lv_color_hex(kMutedHex),
+                                LV_PART_MAIN);
+    lv_obj_set_style_text_font(min_tick, &lv_font_montserrat_14,
+                               LV_PART_MAIN);
+    lv_label_set_text(min_tick, fmt_tick(v_min).c_str());
+    lv_obj_set_pos(min_tick, tick_x, cell_y + bar_h - 16);
+    lv_obj_set_width(min_tick, tick_w);
+    // Unit label between min and max ticks, vertically centered on
+    // the bar's mid (only when there's a unit and enough vertical
+    // space to avoid overlapping the ticks).
+    if (d.unit[0] && bar_h >= 60) {
+      lv_obj_t* unit_label = lv_label_create(root);
+      lv_obj_set_style_text_color(unit_label, lv_color_hex(kMutedHex),
+                                  LV_PART_MAIN);
+      lv_obj_set_style_text_font(unit_label, &lv_font_montserrat_14,
+                                 LV_PART_MAIN);
+      lv_label_set_text(unit_label, d.unit);
+      lv_obj_set_pos(unit_label, tick_x, cell_y + bar_h / 2 - 8);
+      lv_obj_set_width(unit_label, tick_w);
+    }
+
+    auto* bcb = new BarCellBinding{
+        RangeBinding{d, v_min, v_max, colors}, val_label};
+    lv_obj_set_user_data(bar, bcb);
     lv_obj_add_event_cb(
         bar,
         [](lv_event_t* e) {
-          delete static_cast<RangeBinding*>(lv_obj_get_user_data(
+          delete static_cast<BarCellBinding*>(lv_obj_get_user_data(
               static_cast<lv_obj_t*>(lv_event_get_target(e))));
         },
         LV_EVENT_DELETE, nullptr);
@@ -762,16 +840,21 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
         sub,
         [](lv_observer_t* obs, lv_subject_t* s) {
           auto* w = lv_observer_get_target_obj(obs);
-          auto* rb = static_cast<RangeBinding*>(lv_obj_get_user_data(w));
+          auto* bcb = static_cast<BarCellBinding*>(lv_obj_get_user_data(w));
+          auto& rb = bcb->range;
           float raw = lv_subject_get_float(s);
-          float v = raw * rb->display.scale + rb->display.offset;
-          lv_bar_set_value(w, scale_to_steps(v, rb->min, rb->max), LV_ANIM_OFF);
-          // Honor the per-widget fg_color override the same way the
-          // standalone bar widget does — zone match always wins.
-          uint32_t fallback = rb->colors.fg != kFgHex ? rb->colors.fg
-                                                     : kAccentHex;
-          uint32_t c = zone_color(rb->display.path, raw, fallback);
+          float v = raw * rb.display.scale + rb.display.offset;
+          lv_bar_set_value(w, scale_to_steps(v, rb.min, rb.max), LV_ANIM_OFF);
+          uint32_t fallback = rb.colors.fg != kFgHex ? rb.colors.fg
+                                                    : kAccentHex;
+          uint32_t c = zone_color(rb.display.path, raw, fallback);
           lv_obj_set_style_bg_color(w, lv_color_hex(c), LV_PART_INDICATOR);
+          // Live value text. We deliberately omit the unit here — the
+          // unit appears once next to the ticks; repeating it on every
+          // bar would crowd the small cell.
+          char buf[24];
+          snprintf(buf, sizeof(buf), "%.*f", rb.display.decimals, v);
+          lv_label_set_text(bcb->value_label, buf);
         },
         bar, nullptr);
 
@@ -783,7 +866,7 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
       lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, LV_PART_MAIN);
       lv_label_set_text(lbl, b_label);
       lv_obj_set_pos(lbl, cell_x, cell_y + bar_h + 4);
-      lv_obj_set_width(lbl, bar_w);
+      lv_obj_set_width(lbl, slot_w - 4);
       lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     }
 
