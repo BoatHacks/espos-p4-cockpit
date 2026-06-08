@@ -90,7 +90,10 @@ std::vector<Notification> NotificationsRegistry::snapshot(
   std::vector<Notification> out;
   out.reserve(map_.size());
   for (const auto& kv : map_) {
-    if (acked_.count(kv.first)) continue;  // locally acknowledged
+    // Ack suppresses the alert-overlay popup, NOT the list. The
+    // condition is still live on the bus, and the operator needs to
+    // see it (red row + alarm message) to remain aware of it. Only
+    // most_severe() (the overlay's driver) excludes acked paths.
     if (!include_cleared &&
         (kv.second.state == NotState::Nominal ||
          kv.second.state == NotState::Normal)) {
@@ -147,12 +150,6 @@ void NotificationsRegistry::hook_sk_ws() {
     constexpr const char* kPrefix = "notifications.";
     constexpr size_t kPrefixLen = 14;  // strlen("notifications.")
     if (strncmp(p, kPrefix, kPrefixLen) != 0) return;
-    // Trace every notifications.* delta as it arrives off the WS so
-    // we can tell whether a "missing" notification (e.g. alarms not
-    // appearing in the list widget) is a delivery gap or an apply()
-    // filter. Cheap; INFO-level so it survives default log filters.
-    const char* s = value["state"] | "?";
-    ESP_LOGI(TAG, "[ws] %s state=%s", p, s);
     std::string suffix(p + kPrefixLen);
 
     // Snapshot the value before the WS task moves on. JsonVariantConst
