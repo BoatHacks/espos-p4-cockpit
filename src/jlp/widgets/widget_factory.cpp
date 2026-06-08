@@ -870,20 +870,15 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
     };
     std::string min_text = fmt_tick(v_min);
     std::string max_text = fmt_tick(v_max);
-    // Suffix the unit onto the MAX tick so the operator sees the
-    // scale + unit in one read ("8000 W") without needing a
-    // dedicated unit label. Keeps the right-of-bar column compact
-    // and avoids the unit-vs-0-baseline collision that used to
-    // suppress the unit entirely on signed ranges.
-    if (d.unit[0]) {
-      max_text += " ";
-      max_text += d.unit;
-    }
     // Resize bar dynamically per-cell: longer tick text (negatives,
     // 4+ digit values) needs more reserve. ~7 px per char in
     // Montserrat 14.
-    int tick_chars = (int)std::max(min_text.size(), max_text.size());
-    int tick_reserve = std::max(30, tick_chars * 7 + 4);
+    // Tick column has to fit the widest of: min text, max text, and
+    // the unit text (rendered on a separate row below the max tick).
+    // ~7 px per char in Montserrat 14 is a safe upper bound.
+    size_t unit_len = d.unit[0] ? std::strlen(d.unit) : 0;
+    size_t widest = std::max({min_text.size(), max_text.size(), unit_len});
+    int tick_reserve = std::max(30, (int)widest * 7 + 4);
     int bar_w = slot_w - tick_reserve - 6;
     if (bar_w < 14) bar_w = 14;
     if (bar_w > slot_w - 12) bar_w = slot_w - 12;
@@ -966,9 +961,20 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
     lv_label_set_text(min_tick, min_text.c_str());
     lv_obj_set_pos(min_tick, tick_x, cell_y + bar_h - 16);
     lv_obj_set_height(min_tick, 16);
-    // Unit lives at the end of the max tick text (set above) so
-    // there's no separate label to position. Avoids overlap with
-    // the "0" baseline label on signed ranges.
+    // Unit on its own line below the max tick so it stays inside
+    // the cell even for wide units ("hour", "kWh") that would
+    // otherwise overflow into the next slot or get clipped at the
+    // tile edge. Same muted color as the ticks.
+    if (d.unit[0]) {
+      lv_obj_t* unit_lbl = lv_label_create(root);
+      lv_obj_set_style_text_color(unit_lbl, lv_color_hex(kMutedHex),
+                                  LV_PART_MAIN);
+      lv_obj_set_style_text_font(unit_lbl, &lv_font_montserrat_14,
+                                 LV_PART_MAIN);
+      lv_label_set_text(unit_lbl, d.unit);
+      lv_obj_set_pos(unit_lbl, tick_x, cell_y + 14);
+      lv_obj_set_height(unit_lbl, 16);
+    }
     (void)tick_w;
 
     auto* bcb = new BarCellBinding{
@@ -1024,7 +1030,11 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
         },
         bar, nullptr);
 
-    // Per-bar caption below the bar.
+    // Per-bar caption below the bar. Width = bar_w so the text
+    // centers under the bar itself, NOT the whole slot (which
+    // includes the tick column on the right). Otherwise the
+    // caption visually shifts right of where the operator expects
+    // it.
     const char* b_label = bspec["label"] | "";
     if (*b_label) {
       lv_obj_t* lbl = lv_label_create(root);
@@ -1032,7 +1042,7 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
       lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, LV_PART_MAIN);
       lv_label_set_text(lbl, b_label);
       lv_obj_set_pos(lbl, cell_x, cell_y + bar_h + 4);
-      lv_obj_set_width(lbl, slot_w - 4);
+      lv_obj_set_width(lbl, bar_w);
       lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     }
 
