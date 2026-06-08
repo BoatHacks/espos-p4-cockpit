@@ -208,6 +208,117 @@ lv_obj_t* build_label(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   return root;
 }
 
+// ---- value ----
+//
+// Big-number readout tile. Differs from `label` in three ways:
+//
+//   - `label` is text-first: a static caption when there's no bind,
+//     or the SK meta `description` (when present) once bound. A
+//     bound label prefers the human-readable name over the number
+//     (e.g. "BMS DnC" instead of "1.0").
+//   - `value` is number-first: ALWAYS shows the formatted live
+//     value as the dominant glyph in the tile. Caption is the small
+//     top-left label; unit is small bottom-right; the big number
+//     centers between them. Description is ignored.
+//   - Zone state tints the WHOLE tile background by default (matches
+//     the helm convention "if it's red, look at it now").
+//
+// Schema fields: x, y, w, h, label?, bind (required), display? (with
+// scale/offset/decimals/unit auto-prefilled by the designer from SK
+// displayUnits + unitsPreferences), bg_color?, fg_color?.
+lv_obj_t* build_value(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
+  const char* path = spec["bind"] | (const char*)nullptr;
+  if (!path) { *err = "value: bind required"; return nullptr; }
+  const char* caption = spec["label"] | (const char*)nullptr;
+  const Colors colors = parse_colors(spec);
+
+  lv_subject_t* sub = ctx.reg.get_or_create(path, SubjectKind::Float);
+  if (!sub) { *err = std::string("kind conflict on ") + path; return nullptr; }
+  ctx.live_paths.insert(path);
+
+  lv_obj_t* root = lv_obj_create(ctx.parent);
+  apply_geometry(root, spec);
+  lv_obj_set_style_bg_color(root, lv_color_hex(colors.bg), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(root, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_border_color(root, lv_color_hex(0x30363d), LV_PART_MAIN);
+  lv_obj_set_style_border_width(root, 1, LV_PART_MAIN);
+  lv_obj_set_style_outline_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_outline_pad(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_shadow_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_radius(root, 6, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(root, 6, LV_PART_MAIN);
+  lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
+
+  if (caption && *caption) {
+    lv_obj_t* cap = lv_label_create(root);
+    lv_obj_set_style_text_color(cap, lv_color_hex(kMutedHex), LV_PART_MAIN);
+    lv_obj_set_style_text_font(cap, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_label_set_text(cap, caption);
+    lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 0, 0);
+  }
+
+  // Big centered value. Font size scales with tile height so a tall
+  // tile reads from across the cockpit. ~50% of inner height clamped
+  // to a font size we actually have compiled in (Montserrat 14/16/20/28).
+  int box_h = spec["h"] | 60;
+  const lv_font_t* big_font = &lv_font_montserrat_28;
+  if (box_h < 60) big_font = &lv_font_montserrat_20;
+  if (box_h < 40) big_font = &lv_font_montserrat_16;
+  lv_obj_t* val = lv_label_create(root);
+  lv_obj_set_style_text_color(val, lv_color_hex(colors.fg), LV_PART_MAIN);
+  lv_obj_set_style_text_font(val, big_font, LV_PART_MAIN);
+  lv_label_set_text(val, "—");
+  lv_obj_center(val);
+
+  // Unit label flush bottom-right. The big number stays the focal
+  // point; unit is informational only.
+  lv_obj_t* unit_lbl = lv_label_create(root);
+  lv_obj_set_style_text_color(unit_lbl, lv_color_hex(kMutedHex),
+                              LV_PART_MAIN);
+  lv_obj_set_style_text_font(unit_lbl, &lv_font_montserrat_14,
+                             LV_PART_MAIN);
+  lv_label_set_text(unit_lbl, "");
+  lv_obj_align(unit_lbl, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+
+  struct ValueCtx {
+    Disp d;
+    lv_obj_t* tile;
+    lv_obj_t* unit_lbl;
+    Colors colors;
+  };
+  auto* vctx = new ValueCtx{parse_display(spec), root, unit_lbl, colors};
+  lv_obj_set_user_data(val, vctx);
+  lv_obj_add_event_cb(
+      val,
+      [](lv_event_t* e) {
+        delete static_cast<ValueCtx*>(lv_obj_get_user_data(
+            static_cast<lv_obj_t*>(lv_event_get_target(e))));
+      },
+      LV_EVENT_DELETE, nullptr);
+  lv_subject_add_observer_obj(
+      sub,
+      [](lv_observer_t* obs, lv_subject_t* s) {
+        auto* w = lv_observer_get_target_obj(obs);
+        auto* vc = static_cast<ValueCtx*>(lv_obj_get_user_data(w));
+        float raw = lv_subject_get_float(s);
+        float v = raw * vc->d.scale + vc->d.offset;
+        // Big number: just the formatted value, no unit (unit sits
+        // in its own bottom-right label so it doesn't grow / shrink
+        // the centered text when the value width changes).
+        lv_label_set_text_fmt(w, "%.*f", vc->d.decimals, v);
+        // Unit label: kept separate; set once is enough but cheap.
+        lv_label_set_text(vc->unit_lbl, vc->d.unit);
+        // Zone tint paints the whole tile bg. Raw value matched
+        // against raw-unit zones (firmware convention). Falls back
+        // to spec'd bg_color when no zone matches.
+        uint32_t bg = zone_color(vc->d.path, raw, vc->colors.bg);
+        lv_obj_set_style_bg_color(vc->tile, lv_color_hex(bg), LV_PART_MAIN);
+      },
+      val, nullptr);
+
+  return root;
+}
+
 // ---- toggle ----
 //
 // Requires `bind` (Int subject). No optimistic latch — visual state
@@ -1335,6 +1446,7 @@ lv_obj_t* build_widget(BuildCtx& ctx, JsonObjectConst spec,
   if (!type) { *err = "widget missing type"; return nullptr; }
   std::string t(type);
   if (t == "label")  return build_label(ctx, spec, err);
+  if (t == "value")  return build_value(ctx, spec, err);
   if (t == "toggle") return build_toggle(ctx, spec, err);
   if (t == "arc")    return build_arc(ctx, spec, err);
   if (t == "bar")      return build_bar(ctx, spec, err);
