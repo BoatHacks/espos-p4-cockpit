@@ -719,14 +719,6 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
   int n = (int)bars.size();
   if (n <= 0) n = 1;
   int slot_w = inner_w / n;
-  // Reserve ~26 px on the right of the bar for tick labels (min/max).
-  constexpr int kTickReserve = 28;
-  // Bar width is ~half the slot so it stays clearly rectangular and
-  // leaves room for the scale labels. Floor at 14 px so the bar is
-  // never thinner than a finger-tip indicator.
-  int bar_w = slot_w - kTickReserve - 6;
-  if (bar_w < 14) bar_w = 14;
-  if (bar_w > slot_w - 12) bar_w = slot_w - 12;
   int bar_h = inner_h - 24;  // label below
   if (bar_h < 20) bar_h = 20;
 
@@ -745,37 +737,8 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
     int cell_x = slot_w * idx + 2;
     int cell_y = caption_h;
 
-    lv_obj_t* bar = lv_bar_create(root);
-    lv_obj_set_size(bar, bar_w, bar_h);
-    lv_obj_set_pos(bar, cell_x, cell_y);
-    lv_bar_set_range(bar, 0, kBarSteps);
-    lv_obj_set_style_bg_color(bar, lv_color_hex(0x30363d), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
-    // LVGL's default theme uses LV_RADIUS_CIRCLE on bars, which turns
-    // small near-square bars into pills/circles. Force a small fixed
-    // radius so the bar reads as a rectangle at every aspect.
-    lv_obj_set_style_radius(bar, 3, LV_PART_MAIN);
-    lv_obj_set_style_radius(bar, 3, LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(bar, lv_color_hex(kAccentHex), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
-    // Vertical: lv_bar's default mode is horizontal; size+orientation
-    // is determined by the widget aspect, so a tall narrow bar fills
-    // from the top by default — we want bottom-up.
-    lv_bar_set_orientation(bar, LV_BAR_ORIENTATION_VERTICAL);
-
-    // Live value text drawn ON the bar (centered).
-    lv_obj_t* val_label = lv_label_create(root);
-    lv_obj_set_style_text_color(val_label, lv_color_hex(0xffffff), LV_PART_MAIN);
-    lv_obj_set_style_text_font(val_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_label_set_text(val_label, "—");
-    lv_obj_set_width(val_label, bar_w);
-    lv_obj_set_style_text_align(val_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-    lv_obj_set_pos(val_label, cell_x, cell_y + bar_h / 2 - 8);
-
-    // Min/max tick labels on the right of the bar. Use the formatted
-    // display value (scale+offset+decimals+unit) so the operator
-    // sees the range in their preferred units, matching the live
-    // value text.
+    // Pull the per-bar display + range now so we can compute the
+    // tick width before laying out the bar itself.
     Disp d{1.f, 0.f, 0, "", ""};
     JsonObjectConst display = bspec["display"];
     if (!display.isNull()) {
@@ -794,6 +757,75 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
       snprintf(buf, sizeof(buf), "%.*f", d.decimals, v);
       return std::string(buf);
     };
+    std::string min_text = fmt_tick(v_min);
+    std::string max_text = fmt_tick(v_max);
+    // Resize bar dynamically per-cell: longer tick text (negatives,
+    // 4+ digit values) needs more reserve. ~7 px per char in
+    // Montserrat 14.
+    int tick_chars = (int)std::max(min_text.size(), max_text.size());
+    int tick_reserve = std::max(30, tick_chars * 7 + 4);
+    int bar_w = slot_w - tick_reserve - 6;
+    if (bar_w < 14) bar_w = 14;
+    if (bar_w > slot_w - 12) bar_w = slot_w - 12;
+
+    lv_obj_t* bar = lv_bar_create(root);
+    lv_obj_set_size(bar, bar_w, bar_h);
+    lv_obj_set_pos(bar, cell_x, cell_y);
+    lv_bar_set_range(bar, 0, kBarSteps);
+    // When the range straddles zero we render the fill as a signed
+    // delta from the zero baseline (LV_BAR_MODE_RANGE), so a value
+    // of -5 on a [-10..10] bar shows a fill from the midline going
+    // down rather than a fill from the bottom going up to 40%.
+    bool signed_range = v_min < 0.f && v_max > 0.f;
+    if (signed_range) {
+      lv_bar_set_mode(bar, LV_BAR_MODE_RANGE);
+    }
+    lv_obj_set_style_bg_color(bar, lv_color_hex(0x30363d), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
+    // LVGL's default theme uses LV_RADIUS_CIRCLE on bars, which turns
+    // small near-square bars into pills/circles. Force a small fixed
+    // radius so the bar reads as a rectangle at every aspect.
+    lv_obj_set_style_radius(bar, 3, LV_PART_MAIN);
+    lv_obj_set_style_radius(bar, 3, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(kAccentHex), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
+    // Vertical: lv_bar's default mode is horizontal; size+orientation
+    // is determined by the widget aspect, so a tall narrow bar fills
+    // from the top by default — we want bottom-up.
+    lv_bar_set_orientation(bar, LV_BAR_ORIENTATION_VERTICAL);
+
+    // Zero baseline marker for signed ranges. Just a "0" text label
+    // at the y-coord that corresponds to v=0 on the right side of
+    // the bar — same column as the min/max ticks. The bar's RANGE
+    // fill (below) naturally produces the visual "above / below
+    // zero" cue; an extra horizontal line on the track would be
+    // covered by the indicator anyway.
+    if (signed_range) {
+      // y = top_of_bar + bar_h * (1 - (0 - v_min) / (v_max - v_min))
+      float frac = (0.f - v_min) / (v_max - v_min);
+      int baseline_y = cell_y + bar_h - (int)(bar_h * frac);
+      lv_obj_t* zero_lbl = lv_label_create(root);
+      lv_obj_set_style_text_color(zero_lbl, lv_color_hex(0x8b949e),
+                                  LV_PART_MAIN);
+      lv_obj_set_style_text_font(zero_lbl, &lv_font_montserrat_14,
+                                 LV_PART_MAIN);
+      lv_label_set_text(zero_lbl, "0");
+      lv_obj_set_pos(zero_lbl, cell_x + bar_w + 4, baseline_y - 8);
+    }
+
+    // Live value text drawn ON the bar (centered).
+    lv_obj_t* val_label = lv_label_create(root);
+    lv_obj_set_style_text_color(val_label, lv_color_hex(0xffffff), LV_PART_MAIN);
+    lv_obj_set_style_text_font(val_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_label_set_text(val_label, "—");
+    lv_obj_set_width(val_label, bar_w);
+    lv_obj_set_style_text_align(val_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_pos(val_label, cell_x, cell_y + bar_h / 2 - 8);
+
+    // Min/max tick labels on the right of the bar. Auto-size them so
+    // negative / many-digit values don't wrap; we reserved room
+    // above. Place them flush-right of the reserved area so the
+    // numbers visually align with the top / bottom of the bar.
     int tick_x = cell_x + bar_w + 4;
     int tick_w = slot_w - bar_w - 6;
     lv_obj_t* max_tick = lv_label_create(root);
@@ -801,21 +833,24 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
                                 LV_PART_MAIN);
     lv_obj_set_style_text_font(max_tick, &lv_font_montserrat_14,
                                LV_PART_MAIN);
-    lv_label_set_text(max_tick, fmt_tick(v_max).c_str());
+    lv_label_set_text(max_tick, max_text.c_str());
     lv_obj_set_pos(max_tick, tick_x, cell_y - 2);
-    lv_obj_set_width(max_tick, tick_w);
+    // Don't constrain width — let LVGL size to text content so long
+    // negative values don't wrap. Cap height to one line.
+    lv_obj_set_height(max_tick, 16);
     lv_obj_t* min_tick = lv_label_create(root);
     lv_obj_set_style_text_color(min_tick, lv_color_hex(kMutedHex),
                                 LV_PART_MAIN);
     lv_obj_set_style_text_font(min_tick, &lv_font_montserrat_14,
                                LV_PART_MAIN);
-    lv_label_set_text(min_tick, fmt_tick(v_min).c_str());
+    lv_label_set_text(min_tick, min_text.c_str());
     lv_obj_set_pos(min_tick, tick_x, cell_y + bar_h - 16);
-    lv_obj_set_width(min_tick, tick_w);
+    lv_obj_set_height(min_tick, 16);
     // Unit label between min and max ticks, vertically centered on
-    // the bar's mid (only when there's a unit and enough vertical
-    // space to avoid overlapping the ticks).
-    if (d.unit[0] && bar_h >= 60) {
+    // the bar's mid (only when there's a unit, no zero label is
+    // taking the same spot, and enough vertical space to avoid
+    // overlapping the ticks).
+    if (d.unit[0] && bar_h >= 60 && !signed_range) {
       lv_obj_t* unit_label = lv_label_create(root);
       lv_obj_set_style_text_color(unit_label, lv_color_hex(kMutedHex),
                                   LV_PART_MAIN);
@@ -829,6 +864,15 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
     auto* bcb = new BarCellBinding{
         RangeBinding{d, v_min, v_max, colors}, val_label};
     lv_obj_set_user_data(bar, bcb);
+    if (signed_range) {
+      // Pre-init the start to the zero-steps position; the observer
+      // sets only the end on each update. RANGE mode draws the fill
+      // BETWEEN start and end, so anchoring start at zero produces
+      // the "band from zero" behavior.
+      int32_t zero_steps = scale_to_steps(0.f, v_min, v_max);
+      lv_bar_set_start_value(bar, zero_steps, LV_ANIM_OFF);
+      lv_bar_set_value(bar, zero_steps, LV_ANIM_OFF);
+    }
     lv_obj_add_event_cb(
         bar,
         [](lv_event_t* e) {
@@ -844,7 +888,19 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
           auto& rb = bcb->range;
           float raw = lv_subject_get_float(s);
           float v = raw * rb.display.scale + rb.display.offset;
-          lv_bar_set_value(w, scale_to_steps(v, rb.min, rb.max), LV_ANIM_OFF);
+          int32_t v_steps = scale_to_steps(v, rb.min, rb.max);
+          if (rb.min < 0.f && rb.max > 0.f) {
+            // Signed range: draw the fill from the zero baseline to
+            // v, regardless of sign. start = min(zero, v); end =
+            // max(zero, v).
+            int32_t zero_steps = scale_to_steps(0.f, rb.min, rb.max);
+            int32_t start = v_steps < zero_steps ? v_steps : zero_steps;
+            int32_t end   = v_steps > zero_steps ? v_steps : zero_steps;
+            lv_bar_set_start_value(w, start, LV_ANIM_OFF);
+            lv_bar_set_value(w, end, LV_ANIM_OFF);
+          } else {
+            lv_bar_set_value(w, v_steps, LV_ANIM_OFF);
+          }
           uint32_t fallback = rb.colors.fg != kFgHex ? rb.colors.fg
                                                     : kAccentHex;
           uint32_t c = zone_color(rb.display.path, raw, fallback);
