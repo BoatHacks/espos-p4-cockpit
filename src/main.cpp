@@ -94,7 +94,6 @@ void setup() {
   jlp::layout_manager().set_post_swap_hook(
       [app](bool new_paths_introduced,
             const std::set<std::string>& new_paths) {
-        (void)app;
         if (!new_paths_introduced) return;
         // Pull SK meta (zones + description) for just the newly-
         // introduced paths via HTTP REST. The per-path endpoint is
@@ -102,14 +101,19 @@ void setup() {
         // them serially so the burst stays small.
         std::vector<std::string> v(new_paths.begin(), new_paths.end());
         jlp::zone_fetch_for_paths("192.168.0.148", 4100, v);
-        // No ws->restart() here. Restarting the WS makes SK resend
-        // the full initial state for every subscribed path — a
-        // burst that overflows our 100-deep receive queue and stalls
-        // event_loop processing the drain for tens of seconds. New
-        // listeners SensESP creates lazily as widgets bind paths
-        // still receive their first values through normal delta
-        // delivery; the restart was a belt-and-suspenders that
-        // turned out to cost more than it bought.
+        // Restart the WS so SensESP re-sends its per-listener
+        // subscribe list. SKValueListeners created after the WS
+        // is already up never get subscribed otherwise — they sit
+        // silent until the next reconnect. Adding a layout with
+        // new paths is exactly that case. Deferred to a fresh
+        // event_loop tick so apply() returns to the HTTP task and
+        // signals its done-semaphore before we tear down the WS
+        // (the reconnect is synchronous and would otherwise eat
+        // the 25s apply budget).
+        sensesp::event_loop()->onDelay(0, [app]() {
+          auto ws = app->get_ws_client();
+          if (ws) ws->restart();
+        });
       });
 
   remote_log_start(2323);
