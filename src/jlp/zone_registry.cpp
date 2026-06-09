@@ -71,7 +71,13 @@ void ZoneRegistry::apply_meta(const std::string& path,
   std::vector<Zone> zs;
   zs.reserve(zarr.size());
   for (JsonObjectConst z : zarr) {
-    zs.push_back({z["lower"] | 0.f, z["upper"] | 0.f,
+    // SK convention: a missing `lower` means "-infinity" (the zone
+    // covers everything below `upper`); a missing `upper` means
+    // "+infinity". Defaulting both to 0 was a bug — every
+    // single-sided zone (the common case for alarm thresholds)
+    // collapsed to lower==upper==0 and matched nothing, so the
+    // firmware never tinted bound widgets.
+    zs.push_back({z["lower"] | -1e30f, z["upper"] | 1e30f,
                   parse_state(z["state"] | "normal")});
   }
   map_[path] = std::move(zs);
