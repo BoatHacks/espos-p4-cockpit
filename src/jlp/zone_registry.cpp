@@ -2,9 +2,12 @@
 
 #include <Arduino.h>
 #include "esp_log.h"
+#include "lvgl.h"
 #include "sensesp.h"
 #include "sensesp/signalk/signalk_ws_client.h"
 #include "sensesp_app.h"
+
+#include "subject_registry.h"
 
 static const char* TAG = "jlp.zones";
 
@@ -75,28 +78,41 @@ const Zone* ZoneRegistry::match(const std::string& path,
 
 void ZoneRegistry::apply_meta(const std::string& path,
                               const JsonObjectConst& meta) {
+  bool changed = false;
   const char* desc = meta["description"] | (const char*)nullptr;
   if (desc && *desc) {
     descriptions_[path] = desc;
     ESP_LOGI(TAG, "%s: description=\"%s\"", path.c_str(), desc);
+    changed = true;
   }
   JsonArrayConst zarr = meta["zones"];
-  if (zarr.isNull() || zarr.size() == 0) return;
-  std::vector<Zone> zs;
-  zs.reserve(zarr.size());
-  for (JsonObjectConst z : zarr) {
-    // SK convention: a missing `lower` means "-infinity" (the zone
-    // covers everything below `upper`); a missing `upper` means
-    // "+infinity". Defaulting both to 0 was a bug — every
-    // single-sided zone (the common case for alarm thresholds)
-    // collapsed to lower==upper==0 and matched nothing, so the
-    // firmware never tinted bound widgets.
-    zs.push_back({z["lower"] | -1e30f, z["upper"] | 1e30f,
-                  parse_state(z["state"] | "normal")});
+  if (!zarr.isNull() && zarr.size() > 0) {
+    std::vector<Zone> zs;
+    zs.reserve(zarr.size());
+    for (JsonObjectConst z : zarr) {
+      // SK convention: a missing `lower` means "-infinity" (the zone
+      // covers everything below `upper`); a missing `upper` means
+      // "+infinity". Defaulting both to 0 was a bug — every
+      // single-sided zone (the common case for alarm thresholds)
+      // collapsed to lower==upper==0 and matched nothing, so the
+      // firmware never tinted bound widgets.
+      zs.push_back({z["lower"] | -1e30f, z["upper"] | 1e30f,
+                    parse_state(z["state"] | "normal")});
+    }
+    map_[path] = std::move(zs);
+    ESP_LOGI(TAG, "%s: %u zones loaded from WS meta", path.c_str(),
+             (unsigned)map_[path].size());
+    changed = true;
   }
-  map_[path] = std::move(zs);
-  ESP_LOGI(TAG, "%s: %u zones loaded from WS meta", path.c_str(),
-           (unsigned)map_[path].size());
+  if (!changed) return;
+  // Refire the value observer for any widget bound to this path so
+  // labels pick up newly-arrived descriptions and bars pick up new
+  // zones without waiting for the next value delta. Without this,
+  // a label whose underlying value never updates (a switch state
+  // that hasn't been toggled since boot) stays at its initial "—"
+  // text even after description meta arrives via REST fetch.
+  lv_subject_t* sub = registry().lookup(path);
+  if (sub) lv_subject_notify(sub);
 }
 
 const std::string& ZoneRegistry::description(const std::string& path) const {
