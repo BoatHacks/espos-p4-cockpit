@@ -33,7 +33,12 @@ class LayoutManager {
   // So a push that introduces new paths needs a WS restart for those
   // values to flow; a push that only rearranges existing widgets
   // doesn't.)
-  using PostSwapHook = std::function<void(bool new_paths_introduced)>;
+  // Fires after every successful apply + swap. `new_paths` is the set
+  // of bound paths the new layout introduced that weren't already in
+  // the previous one (or all paths on first apply).
+  using PostSwapHook =
+      std::function<void(bool new_paths_introduced,
+                         const std::set<std::string>& new_paths)>;
   void set_post_swap_hook(PostSwapHook h) { post_swap_ = std::move(h); }
 
   // Parses, validates, builds, and (on success) swaps in the new

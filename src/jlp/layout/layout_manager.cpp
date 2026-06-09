@@ -296,15 +296,17 @@ ApplyResult LayoutManager::apply(const std::string& json, ApplySource src) {
   // Compare against the previously-known path set so the post-swap
   // hook can decide whether to restart the WS (needed only if the
   // new layout introduced paths SK isn't currently subscribed to).
-  bool new_paths = false;
+  // Capture the diff itself too — the hook uses it to fetch SK meta
+  // for just the new paths instead of re-fetching everything.
+  std::set<std::string> introduced;
   for (const auto& p : live_paths) {
     if (known_paths_.find(p) == known_paths_.end()) {
-      new_paths = true;
-      break;
+      introduced.insert(p);
     }
   }
+  bool new_paths = !introduced.empty();
   known_paths_ = live_paths;
-  if (post_swap_) post_swap_(new_paths);
+  if (post_swap_) post_swap_(new_paths, introduced);
 
   r.ok = true;
   r.name = active_name_;

@@ -8,7 +8,9 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <cstdio>
+#include <set>
 #include <string>
+#include <vector>
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -28,6 +30,8 @@
 #include "jlp/layout/store.h"
 #include "jlp/net/http_api.h"
 #include "jlp/net/layout_fetch.h"
+#include "jlp/net/zone_fetch.h"
+#include "jlp/zone_registry.h"
 #include "jlp/net/mdns_announce.h"
 #include "jlp/status_overlay.h"
 #include "jlp/subject_registry.h"
@@ -88,8 +92,17 @@ void setup() {
   // after-boot (the only case that introduces a brand-new path set
   // relative to the empty known_paths_ map).
   jlp::layout_manager().set_post_swap_hook(
-      [app](bool new_paths_introduced) {
+      [app](bool new_paths_introduced,
+            const std::set<std::string>& new_paths) {
         if (!new_paths_introduced) return;
+        // Pull SK meta (zones + description) for just the newly-
+        // introduced paths via HTTP REST. WS meta deltas would be
+        // ideal but SensESP opens its WS with subscribe=none and the
+        // wildcard subscribe needed to coax meta out of SK overflows
+        // the WS receive queue (queue-full warnings). The per-path
+        // REST endpoint avoids both problems.
+        std::vector<std::string> v(new_paths.begin(), new_paths.end());
+        jlp::zone_fetch_for_paths("192.168.0.148", 4100, v);
         sensesp::event_loop()->onDelay(0, [app]() {
           auto ws = app->get_ws_client();
           if (ws) ws->restart();
