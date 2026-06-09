@@ -86,6 +86,31 @@ void apply_geometry(lv_obj_t* obj, JsonObjectConst spec) {
   lv_obj_set_size(obj, spec["w"] | 120, spec["h"] | 60);
 }
 
+// Resolve a desired pixel font size to a compiled Montserrat font.
+// LVGL can't synthesize fonts at runtime — we have to pick from
+// what's compiled in (lv_conf.h: LV_FONT_MONTSERRAT_{14,16,20,28,36}
+// on the cockpit build). Snap to the closest compiled size below
+// `desired` so tiles don't overflow when the operator picks a
+// larger-than-fits value; `fallback` is the size used when the
+// spec doesn't specify (preserves existing per-widget defaults).
+const lv_font_t* resolve_font(int desired_px, const lv_font_t* fallback) {
+  if (desired_px <= 0) return fallback;
+  if (desired_px >= 36) return &lv_font_montserrat_36;
+  if (desired_px >= 28) return &lv_font_montserrat_28;
+  if (desired_px >= 20) return &lv_font_montserrat_20;
+  if (desired_px >= 16) return &lv_font_montserrat_16;
+  return &lv_font_montserrat_14;
+}
+
+// Read `display.font_size` if present; otherwise return fallback.
+const lv_font_t* font_from_spec(JsonObjectConst spec,
+                                const lv_font_t* fallback) {
+  JsonObjectConst display = spec["display"];
+  if (display.isNull()) return fallback;
+  int sz = display["font_size"] | 0;
+  return resolve_font(sz, fallback);
+}
+
 // Returns the zone-coded color for `display_value` on `path`, or
 // `fallback` if the path has no zones or value is outside all zones.
 uint32_t zone_color(const char* path, float display_value, uint32_t fallback) {
@@ -127,7 +152,8 @@ lv_obj_t* build_label(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
     lv_obj_t* lbl = lv_label_create(ctx.parent);
     apply_geometry(lbl, spec);
     lv_obj_set_style_text_color(lbl, lv_color_hex(colors.fg), LV_PART_MAIN);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, LV_PART_MAIN);
+    lv_obj_set_style_text_font(
+        lbl, font_from_spec(spec, &lv_font_montserrat_28), LV_PART_MAIN);
     lv_label_set_text(lbl, caption ? caption : "");
     return lbl;
   }
@@ -157,7 +183,8 @@ lv_obj_t* build_label(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
 
   lv_obj_t* val = lv_label_create(root);
   lv_obj_set_style_text_color(val, lv_color_hex(colors.fg), LV_PART_MAIN);
-  lv_obj_set_style_text_font(val, &lv_font_montserrat_28, LV_PART_MAIN);
+  lv_obj_set_style_text_font(
+      val, font_from_spec(spec, &lv_font_montserrat_28), LV_PART_MAIN);
   lv_label_set_text(val, "—");
   if (caption && *caption) {
     lv_obj_align(val, LV_ALIGN_TOP_LEFT, 0, 20);
@@ -257,13 +284,14 @@ lv_obj_t* build_value(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
     lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 0, 0);
   }
 
-  // Big centered value. Font size scales with tile height so a tall
-  // tile reads from across the cockpit. ~50% of inner height clamped
-  // to a font size we actually have compiled in (Montserrat 14/16/20/28).
+  // Big centered value. Font size: explicit `display.font_size`
+  // wins; otherwise auto-scale with tile height so a tall tile
+  // reads from across the cockpit.
   int box_h = spec["h"] | 60;
-  const lv_font_t* big_font = &lv_font_montserrat_28;
-  if (box_h < 60) big_font = &lv_font_montserrat_20;
-  if (box_h < 40) big_font = &lv_font_montserrat_16;
+  const lv_font_t* default_big = &lv_font_montserrat_28;
+  if (box_h < 60) default_big = &lv_font_montserrat_20;
+  if (box_h < 40) default_big = &lv_font_montserrat_16;
+  const lv_font_t* big_font = font_from_spec(spec, default_big);
   lv_obj_t* val = lv_label_create(root);
   lv_obj_set_style_text_color(val, lv_color_hex(colors.fg), LV_PART_MAIN);
   lv_obj_set_style_text_font(val, big_font, LV_PART_MAIN);
