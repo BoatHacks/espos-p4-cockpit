@@ -3,6 +3,7 @@
 #include "lvgl.h"
 #include <functional>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -34,6 +35,11 @@ class SubjectRegistry {
   lv_subject_t* get_or_create(const std::string& path, SubjectKind kind);
 
   lv_subject_t* lookup(const std::string& path) const;
+  /** Kind of the subject registered for `path`, or nullopt if the
+   *  path isn't registered. Used by the zone-fetch path to drive
+   *  the right typed setter when seeding a freshly-bound subject
+   *  with SK's REST-fetched initial value. */
+  std::optional<SubjectKind> kind_of(const std::string& path) const;
   std::vector<std::string> paths() const;
 
   // Drop subjects (and tear down SensESP listeners) whose path is not

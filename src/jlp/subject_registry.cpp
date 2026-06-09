@@ -105,6 +105,13 @@ lv_subject_t* SubjectRegistry::lookup(const std::string& path) const {
   return &it->second.entry->subject;
 }
 
+std::optional<SubjectKind> SubjectRegistry::kind_of(
+    const std::string& path) const {
+  auto it = map_.find(path);
+  if (it == map_.end()) return std::nullopt;
+  return it->second.entry->kind;
+}
+
 std::vector<std::string> SubjectRegistry::paths() const {
   std::vector<std::string> out;
   out.reserve(map_.size());
