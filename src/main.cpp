@@ -94,19 +94,22 @@ void setup() {
   jlp::layout_manager().set_post_swap_hook(
       [app](bool new_paths_introduced,
             const std::set<std::string>& new_paths) {
+        (void)app;
         if (!new_paths_introduced) return;
         // Pull SK meta (zones + description) for just the newly-
-        // introduced paths via HTTP REST. WS meta deltas would be
-        // ideal but SensESP opens its WS with subscribe=none and the
-        // wildcard subscribe needed to coax meta out of SK overflows
-        // the WS receive queue (queue-full warnings). The per-path
-        // REST endpoint avoids both problems.
+        // introduced paths via HTTP REST. The per-path endpoint is
+        // ~25 ms per path on a healthy LAN; the fetch task drives
+        // them serially so the burst stays small.
         std::vector<std::string> v(new_paths.begin(), new_paths.end());
         jlp::zone_fetch_for_paths("192.168.0.148", 4100, v);
-        sensesp::event_loop()->onDelay(0, [app]() {
-          auto ws = app->get_ws_client();
-          if (ws) ws->restart();
-        });
+        // No ws->restart() here. Restarting the WS makes SK resend
+        // the full initial state for every subscribed path — a
+        // burst that overflows our 100-deep receive queue and stalls
+        // event_loop processing the drain for tens of seconds. New
+        // listeners SensESP creates lazily as widgets bind paths
+        // still receive their first values through normal delta
+        // delivery; the restart was a belt-and-suspenders that
+        // turned out to cost more than it bought.
       });
 
   remote_log_start(2323);
