@@ -393,7 +393,8 @@ lv_obj_t* build_toggle(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   if (caption) {
     lv_obj_t* l = lv_label_create(root);
     lv_obj_set_style_text_color(l, lv_color_hex(colors.fg), LV_PART_MAIN);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_style_text_font(
+        l, font_from_spec(spec, &lv_font_montserrat_20), LV_PART_MAIN);
     lv_label_set_text(l, caption);
     lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
   }
