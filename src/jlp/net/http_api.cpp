@@ -65,7 +65,13 @@ esp_err_t layout_post(httpd_req_t* req) {
     xSemaphoreGive(done);
   });
 
-  if (xSemaphoreTake(done, pdMS_TO_TICKS(10000)) != pdTRUE) {
+  // 25s budget for the apply: build is fast (~hundreds of ms for a
+  // 20-widget layout), but the event_loop task may be backed up
+  // draining incoming SK WS deltas after a server reconnect. 25s
+  // covers that drain without giving up on a healthy layout. The
+  // designer-side proxy timeout is 30s, which leaves room for the
+  // 504 to actually reach the browser instead of being aborted.
+  if (xSemaphoreTake(done, pdMS_TO_TICKS(25000)) != pdTRUE) {
     vSemaphoreDelete(done);
     httpd_resp_set_status(req, "504 Gateway Timeout");
     httpd_resp_sendstr(req,
