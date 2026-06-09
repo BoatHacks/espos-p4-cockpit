@@ -45,7 +45,17 @@ const Zone* ZoneRegistry::match(const std::string& path,
                                 float raw_value) const {
   auto it = map_.find(path);
   if (it == map_.end()) return nullptr;
-  for (const Zone& z : it->second) {
+  const auto& zs = it->second;
+  // Find the zone with the highest upper bound — if the value sits
+  // exactly on that upper edge (full tank reading 1.0 when zones are
+  // [0..0.2 alarm, 0.2..1 normal]), accept it into that top zone.
+  // Without this carve-out, "100%" on a ratio path falls out of every
+  // zone (because [0.2, 1.0) excludes 1.0) and the widget renders
+  // with the default fallback color instead of nominal.
+  float top_edge = -1e30f;
+  for (const Zone& z : zs) if (z.upper > top_edge) top_edge = z.upper;
+
+  for (const Zone& z : zs) {
     // SK convention is half-open [lower, upper). That makes a "point
     // zone" where lower == upper (commonly authored for bool/int state
     // paths like a switch position — alert at 0, nominal at 1) match
@@ -53,6 +63,10 @@ const Zone* ZoneRegistry::match(const std::string& path,
     if (z.lower == z.upper) {
       if (raw_value == z.lower) return &z;
     } else if (raw_value >= z.lower && raw_value < z.upper) {
+      return &z;
+    } else if (raw_value == z.upper && z.upper == top_edge) {
+      // Boundary catch on the topmost zone only — keeps the rest of
+      // the boundaries half-open per SK spec.
       return &z;
     }
   }
