@@ -104,18 +104,23 @@ void ZoneRegistry::apply_meta(const std::string& path,
              (unsigned)map_[path].size());
     changed = true;
   }
-  (void)changed;
-  // We intentionally do NOT call lv_subject_notify(sub) here. That
-  // would fire widget observers reading the subject's current
-  // value, which on a freshly-bound path is the initial 0 — and
-  // SK only sends deltas on change, so a slow-updating path
-  // (battery SOC at a steady 0.94) won't get a real delta for
-  // minutes. The widget would sit at "0" the whole time.
+  if (!changed) return;
+  // Notify the bound subject so widget observers re-fire and pick
+  // up the just-loaded description / zones. The observer reads
+  // description() first and prefers it over the formatted value,
+  // so a label that initially rendered "0.0" (built before the
+  // fetch ran) will swap to "Vorpiek Port" / "Main STB" / etc.
+  // here. zone-tinted bars likewise pick up freshly-loaded zone
+  // bounds without waiting for the next value delta.
   //
-  // Labels that should show a description regardless of the live
-  // value handle that via build_label's pre-set fallback (run at
-  // widget construction time, picks up any description already in
-  // the registry), so this notify isn't needed for them either.
+  // The earlier worry was that observer-fire-on-meta would
+  // overwrite a stale-but-correct rendering with a stale zero.
+  // build_label now pre-seeds the label text from
+  // zones().description() at construction time, so even if no
+  // value ever arrives, the label is legible immediately when
+  // its meta loads.
+  lv_subject_t* sub = registry().lookup(path);
+  if (sub) lv_subject_notify(sub);
 }
 
 const std::string& ZoneRegistry::description(const std::string& path) const {

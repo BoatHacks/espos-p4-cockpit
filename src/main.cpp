@@ -101,19 +101,16 @@ void setup() {
         // them serially so the burst stays small.
         std::vector<std::string> v(new_paths.begin(), new_paths.end());
         jlp::zone_fetch_for_paths("192.168.0.148", 4100, v);
-        // Restart the WS so SensESP re-sends its per-listener
-        // subscribe list. SKValueListeners created after the WS
-        // is already up never get subscribed otherwise — they sit
-        // silent until the next reconnect. Adding a layout with
-        // new paths is exactly that case. Deferred to a fresh
-        // event_loop tick so apply() returns to the HTTP task and
-        // signals its done-semaphore before we tear down the WS
-        // (the reconnect is synchronous and would otherwise eat
-        // the 25s apply budget).
-        sensesp::event_loop()->onDelay(0, [app]() {
-          auto ws = app->get_ws_client();
-          if (ws) ws->restart();
-        });
+        // ws->restart() is intentionally NOT called here anymore.
+        // The reconnect floods event_loop with SK's initial-state
+        // burst for 30+ seconds, wedging the next push or
+        // /screenshot. New SKValueListeners created lazily by
+        // widget builds don't get an immediate subscription, but
+        // they DO get filled by the zone_fetch_for_paths REST
+        // value seed above — same effect on the widget render
+        // without the WS storm. Once the panel power-cycles or
+        // the WS happens to reconnect on its own, the lazy
+        // listeners join the next subscribe frame normally.
       });
 
   remote_log_start(2323);
