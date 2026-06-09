@@ -104,15 +104,18 @@ void ZoneRegistry::apply_meta(const std::string& path,
              (unsigned)map_[path].size());
     changed = true;
   }
-  if (!changed) return;
-  // Refire the value observer for any widget bound to this path so
-  // labels pick up newly-arrived descriptions and bars pick up new
-  // zones without waiting for the next value delta. Without this,
-  // a label whose underlying value never updates (a switch state
-  // that hasn't been toggled since boot) stays at its initial "—"
-  // text even after description meta arrives via REST fetch.
-  lv_subject_t* sub = registry().lookup(path);
-  if (sub) lv_subject_notify(sub);
+  (void)changed;
+  // We intentionally do NOT call lv_subject_notify(sub) here. That
+  // would fire widget observers reading the subject's current
+  // value, which on a freshly-bound path is the initial 0 — and
+  // SK only sends deltas on change, so a slow-updating path
+  // (battery SOC at a steady 0.94) won't get a real delta for
+  // minutes. The widget would sit at "0" the whole time.
+  //
+  // Labels that should show a description regardless of the live
+  // value handle that via build_label's pre-set fallback (run at
+  // widget construction time, picks up any description already in
+  // the registry), so this notify isn't needed for them either.
 }
 
 const std::string& ZoneRegistry::description(const std::string& path) const {

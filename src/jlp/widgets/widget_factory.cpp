@@ -185,7 +185,16 @@ lv_obj_t* build_label(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   lv_obj_set_style_text_color(val, lv_color_hex(colors.fg), LV_PART_MAIN);
   lv_obj_set_style_text_font(
       val, font_from_spec(spec, &lv_font_montserrat_28), LV_PART_MAIN);
-  lv_label_set_text(val, "—");
+  // If a description is already in the registry (loaded via REST
+  // fetch on layout apply), show it immediately so the widget is
+  // legible before — or even without — the first value delta. Slow-
+  // updating SK paths (switch states, SOC) might not see a delta
+  // for a long time; without this the label sits at "—" until the
+  // value changes, which can be never.
+  {
+    const std::string& desc = zones().description(std::string(path));
+    lv_label_set_text(val, desc.empty() ? "—" : desc.c_str());
+  }
   if (caption && *caption) {
     lv_obj_align(val, LV_ALIGN_TOP_LEFT, 0, 20);
   } else {
