@@ -1,0 +1,5 @@
+# Force LF line endings on checkout regardless of the host's
+# core.autocrlf setting. CI / lint tools assume LF; without this,
+# Windows checkouts get CRLF and produce a tree-wide format
+# diff under any --check tool that reads file bytes directly.
+* text=auto eol=lf
