@@ -1,0 +1,74 @@
+#include "idle_dimmer.h"
+
+#include "esp_log.h"
+#include "lvgl.h"
+
+#include "sensesp_base_app.h"
+#include "sensesp_cockpit_display/lvgl/lv_drivers.h"
+#include "wake_overlay.h"
+
+static const char* TAG = "jlp.dimmer";
+
+namespace jlp {
+
+void IdleDimmer::set_on(bool on) {
+  if (on == on_) return;
+  on_ = on;
+  auto* d = sensesp_cockpit_display::get_display();
+  if (!d) return;
+  if (on) {
+    // Hide the wake overlay BEFORE raising the backlight so the user
+    // doesn't see the layout content flash up under the overlay.
+    wake_overlay().hide();
+    d->set_brightness(on_brightness_pct_);
+  } else {
+    // Show the "tap to wake" overlay BEFORE killing the backlight so
+    // the panel doesn't briefly show the layout before going dark,
+    // and so the first wake-tap can't fall through to a toggle or
+    // button underneath.
+    wake_overlay().show();
+    d->set_brightness(dim_pct_);
+  }
+  ESP_LOGI(TAG, "backlight %s (dim_pct=%u)", on ? "on" : "off",
+           (unsigned)dim_pct_);
+}
+
+void IdleDimmer::init() {
+  // LVGL tracks input inactivity automatically. Poll on a 1 Hz cadence
+  // — finer resolution is wasteful for human-scale timeouts.
+  sensesp::event_loop()->onRepeat(1000, [this]() {
+    if (idle_timeout_sec_ == 0) {
+      if (!on_) set_on(true);
+      return;
+    }
+    uint32_t inactive_ms = lv_display_get_inactive_time(NULL);
+    bool should_be_on = inactive_ms < idle_timeout_sec_ * 1000U;
+    if (should_be_on != on_) set_on(should_be_on);
+  });
+}
+
+void IdleDimmer::configure(uint32_t idle_timeout_sec, uint8_t dim_pct) {
+  if (dim_pct > 100) dim_pct = 100;
+  if (idle_timeout_sec_ != idle_timeout_sec || dim_pct_ != dim_pct) {
+    idle_timeout_sec_ = idle_timeout_sec;
+    dim_pct_ = dim_pct;
+    ESP_LOGI(TAG, "idle timeout=%us dim_pct=%u",
+             (unsigned)idle_timeout_sec_, (unsigned)dim_pct_);
+  }
+  // Always re-arm + wake regardless of whether the config actually
+  // changed. A fresh layout push means the operator is at the panel
+  // right now, even if the values match what was already loaded.
+  wake();
+}
+
+void IdleDimmer::wake() {
+  lv_display_trigger_activity(NULL);
+  if (!on_) set_on(true);
+}
+
+IdleDimmer& idle_dimmer() {
+  static IdleDimmer d;
+  return d;
+}
+
+}  // namespace jlp
