@@ -128,7 +128,7 @@ Liveness probe. Returns 200 `{"ok":true}` if the device is up. No body fields ar
 | `name`            | string  | yes      | —       | Display name; returned in `/hello.active_layout_name`. |
 | `status_overlay`  | bool    | no       | `true`  | Whether the device's status strip should be visible. |
 | `tab_strip_height`| int     | no       | `56`    | Pixel height of the multi-screen tab strip. Ignored when there is only one screen. |
-| `display`         | object  | no       | —       | Backlight power-save. `display.idle_timeout_sec` (uint): seconds of no touch before the backlight dims; `0` or omitted disables the dimmer. `display.idle_dim_pct` (uint 0-100, default 80): brightness while idle. Wake sources: any touch (only reliable at high dim_pct on the Waveshare 7B — GT911 desensitizes as the backlight drops), any incoming notification, and a fresh layout push. All three re-arm the idle timer. Capability advertised by `/hello.display.idle_timeout = true` + `idle_dim_pct = true`. |
+| `display`         | object  | no       | —       | Backlight power-save. `display.idle_timeout_sec` (uint): seconds of no touch before the backlight dims; `0` or omitted disables the dimmer. `display.idle_dim_pct` (uint 0-100, default 0 = fully off): brightness while idle. While dimmed the device covers the layout with a "TAP TO WAKE" overlay so the first wake-tap can't accidentally hit a widget underneath. Wake sources: any touch, any incoming notification, a fresh layout push. All three re-arm the idle timer. Capability advertised by `/hello.display.idle_timeout = true` + `idle_dim_pct = true`. |
 | `screens`         | array   | yes      | —       | At least one screen.                                 |
 
 ### Screen object

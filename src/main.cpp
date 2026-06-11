@@ -38,6 +38,7 @@
 #include "jlp/subject_registry.h"
 #include "jlp/alert_overlay.h"
 #include "jlp/notifications_registry.h"
+#include "jlp/wake_overlay.h"
 #include "jlp/zone_registry.h"
 
 using namespace sensesp;
@@ -121,6 +122,10 @@ void setup() {
   jlp::zones().hook_sk_ws();
   jlp::notifications().hook_sk_ws();
   jlp::alert_overlay().init();
+  // wake overlay must be initialised AFTER alert_overlay so that
+  // alert_overlay's move_foreground (when it pops a notification)
+  // still wins z-order over the wake-overlay.
+  jlp::wake_overlay().init();
   jlp::idle_dimmer().init();
   // Any incoming notification wakes the panel so the alarm overlay is
   // actually visible. Token discarded — dimmer is process-lifetime.

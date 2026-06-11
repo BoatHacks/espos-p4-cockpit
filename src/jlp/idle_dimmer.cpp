@@ -5,6 +5,7 @@
 
 #include "sensesp_base_app.h"
 #include "sensesp_cockpit_display/lvgl/lv_drivers.h"
+#include "wake_overlay.h"
 
 static const char* TAG = "jlp.dimmer";
 
@@ -15,7 +16,19 @@ void IdleDimmer::set_on(bool on) {
   on_ = on;
   auto* d = sensesp_cockpit_display::get_display();
   if (!d) return;
-  d->set_brightness(on ? on_brightness_pct_ : dim_pct_);
+  if (on) {
+    // Hide the wake overlay BEFORE raising the backlight so the user
+    // doesn't see the layout content flash up under the overlay.
+    wake_overlay().hide();
+    d->set_brightness(on_brightness_pct_);
+  } else {
+    // Show the "tap to wake" overlay BEFORE killing the backlight so
+    // the panel doesn't briefly show the layout before going dark,
+    // and so the first wake-tap can't fall through to a toggle or
+    // button underneath.
+    wake_overlay().show();
+    d->set_brightness(dim_pct_);
+  }
   ESP_LOGI(TAG, "backlight %s (dim_pct=%u)", on ? "on" : "off",
            (unsigned)dim_pct_);
 }
