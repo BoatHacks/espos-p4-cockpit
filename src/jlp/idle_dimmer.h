@@ -18,9 +18,11 @@ class IdleDimmer {
   void init();
 
   // Reconfigure from a layout. Re-arms the idle window if currently
-  // dimmed. dim_pct is the brightness while idle (0=fully off). The
-  // Waveshare 7B's touchscreen does not detect touches below ~20%,
-  // so callers that want tap-to-wake should pass >= 20.
+  // dimmed. dim_pct is the brightness while idle (0 = fully off).
+  // On the Waveshare 7B the LCD's sync signals desensitize the GT911
+  // touch grid below ~95 % brightness; tap-wake is only fully reliable
+  // very close to full brightness. Lower dim levels save power but
+  // require notifications or a fresh push to wake the panel.
   void configure(uint32_t idle_timeout_sec, uint8_t dim_pct);
 
   // Force the backlight on and re-arm the idle timer. Called from
@@ -36,7 +38,10 @@ class IdleDimmer {
 
   uint32_t idle_timeout_sec_ = 0;   // 0 = disabled
   uint8_t on_brightness_pct_ = 95;  // matches init_backlight()
-  uint8_t dim_pct_ = 20;            // idle brightness; >=20 keeps touch alive
+  // 80 % default: just enough drop to be clearly "asleep" while
+  // staying close enough to full to keep GT911 tap-wake working
+  // reliably. See header comment for why we can't go further.
+  uint8_t dim_pct_ = 80;
   bool on_ = true;
 };
 

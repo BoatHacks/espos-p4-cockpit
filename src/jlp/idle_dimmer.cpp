@@ -15,25 +15,7 @@ void IdleDimmer::set_on(bool on) {
   on_ = on;
   auto* d = sensesp_cockpit_display::get_display();
   if (!d) return;
-  if (on) {
-    // Wake order matters: turn the panel sync back on BEFORE raising
-    // the backlight, so the user doesn't see a flash of stale VRAM.
-    d->set_display_on(true);
-    // LVGL only redraws dirty regions; after a panel sleep the active
-    // screen is "clean" so nothing is pushed until something changes.
-    // Invalidate the whole screen so the next tick paints immediately.
-    lv_obj_t* scr = lv_screen_active();
-    if (scr) lv_obj_invalidate(scr);
-    d->set_brightness(on_brightness_pct_);
-  } else {
-    // When dim_pct is 0, also put the panel itself to sleep. The LCD's
-    // active sync signals couple into the GT911 touch grid, so with
-    // them off the touch chip can still detect taps at 0% backlight.
-    // At any non-zero dim_pct, keep the panel running so the dimmed
-    // content stays visible.
-    d->set_brightness(dim_pct_);
-    if (dim_pct_ == 0) d->set_display_on(false);
-  }
+  d->set_brightness(on ? on_brightness_pct_ : dim_pct_);
   ESP_LOGI(TAG, "backlight %s (dim_pct=%u)", on ? "on" : "off",
            (unsigned)dim_pct_);
 }
@@ -54,13 +36,15 @@ void IdleDimmer::init() {
 
 void IdleDimmer::configure(uint32_t idle_timeout_sec, uint8_t dim_pct) {
   if (dim_pct > 100) dim_pct = 100;
-  if (idle_timeout_sec_ == idle_timeout_sec && dim_pct_ == dim_pct) return;
-  idle_timeout_sec_ = idle_timeout_sec;
-  dim_pct_ = dim_pct;
-  ESP_LOGI(TAG, "idle timeout=%us dim_pct=%u",
-           (unsigned)idle_timeout_sec_, (unsigned)dim_pct_);
-  // Re-arm the idle window so a freshly-pushed layout isn't immediately
-  // dimmed out (the user is actively looking at the panel right now).
+  if (idle_timeout_sec_ != idle_timeout_sec || dim_pct_ != dim_pct) {
+    idle_timeout_sec_ = idle_timeout_sec;
+    dim_pct_ = dim_pct;
+    ESP_LOGI(TAG, "idle timeout=%us dim_pct=%u",
+             (unsigned)idle_timeout_sec_, (unsigned)dim_pct_);
+  }
+  // Always re-arm + wake regardless of whether the config actually
+  // changed. A fresh layout push means the operator is at the panel
+  // right now, even if the values match what was already loaded.
   wake();
 }
 

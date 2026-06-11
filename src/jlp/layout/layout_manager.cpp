@@ -279,11 +279,11 @@ ApplyResult LayoutManager::apply(const std::string& json, ApplySource src) {
   alert_overlay().configure(notif_enabled, notif_min);
 
   // Apply the backlight idle timeout (0 = disabled) and the dim-while-
-  // idle brightness. Default dim_pct=20 matches the Waveshare 7B's
-  // minimum brightness for the GT911 touch controller to still detect
-  // taps; lower values save more power but disable tap-to-wake.
+  // idle brightness. Default dim_pct=80 keeps the Waveshare 7B's
+  // GT911 tap-wake reliable; lower values save more power but only
+  // notifications / fresh pushes will then wake the panel.
   uint32_t idle_timeout_sec = 0;
-  uint8_t idle_dim_pct = 20;
+  uint8_t idle_dim_pct = 80;
   JsonObjectConst display = doc["display"];
   if (!display.isNull()) {
     if (display["idle_timeout_sec"].is<uint32_t>()) {
