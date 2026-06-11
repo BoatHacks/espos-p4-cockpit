@@ -125,6 +125,7 @@ Liveness probe. Returns 200 `{"ok":true}` if the device is up. No body fields ar
 | `name`            | string  | yes      | —       | Display name; returned in `/hello.active_layout_name`. |
 | `status_overlay`  | bool    | no       | `true`  | Whether the device's status strip should be visible. |
 | `tab_strip_height`| int     | no       | `56`    | Pixel height of the multi-screen tab strip. Ignored when there is only one screen. |
+| `display`         | object  | no       | —       | Backlight power-save. `display.idle_timeout_sec` (uint): seconds of no touch before the backlight switches fully off. `0` or omitted disables the dimmer. Touch, any incoming notification, and a fresh layout push wake the panel and re-arm the timer. Capability advertised by `/hello.display.idle_timeout = true`. |
 | `screens`         | array   | yes      | —       | At least one screen.                                 |
 
 ### Screen object

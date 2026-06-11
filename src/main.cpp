@@ -26,6 +26,7 @@
 #include "sensesp/system/lambda_consumer.h"
 
 #include "jlp/default_layout.h"
+#include "jlp/idle_dimmer.h"
 #include "jlp/layout/layout_manager.h"
 #include "jlp/layout/store.h"
 #include "jlp/net/http_api.h"
@@ -120,6 +121,11 @@ void setup() {
   jlp::zones().hook_sk_ws();
   jlp::notifications().hook_sk_ws();
   jlp::alert_overlay().init();
+  jlp::idle_dimmer().init();
+  // Any incoming notification wakes the panel so the alarm overlay is
+  // actually visible. Token discarded — dimmer is process-lifetime.
+  (void)jlp::notifications().on_change(
+      []() { jlp::idle_dimmer().wake(); });
   jlp::layout_fetch_async_apply("192.168.0.148", 4100);
 
   // --- SK WS state into the overlay ---

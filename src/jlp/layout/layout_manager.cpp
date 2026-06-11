@@ -6,6 +6,7 @@
 #include "esp_log.h"
 
 #include "../alert_overlay.h"
+#include "../idle_dimmer.h"
 #include "../notifications_registry.h"
 #include "../status_overlay.h"
 #include "../subject_registry.h"
@@ -276,6 +277,23 @@ ApplyResult LayoutManager::apply(const std::string& json, ApplySource src) {
     notif_min = parse_not_state(notif["min_state"] | "alarm");
   }
   alert_overlay().configure(notif_enabled, notif_min);
+
+  // Apply the backlight idle timeout (0 = disabled) and the dim-while-
+  // idle brightness. Default dim_pct=20 matches the Waveshare 7B's
+  // minimum brightness for the GT911 touch controller to still detect
+  // taps; lower values save more power but disable tap-to-wake.
+  uint32_t idle_timeout_sec = 0;
+  uint8_t idle_dim_pct = 20;
+  JsonObjectConst display = doc["display"];
+  if (!display.isNull()) {
+    if (display["idle_timeout_sec"].is<uint32_t>()) {
+      idle_timeout_sec = display["idle_timeout_sec"];
+    }
+    if (display["idle_dim_pct"].is<uint8_t>()) {
+      idle_dim_pct = display["idle_dim_pct"];
+    }
+  }
+  idle_dimmer().configure(idle_timeout_sec, idle_dim_pct);
 
   lv_obj_t* old_root = current_root_;
   lv_obj_clear_flag(staging, LV_OBJ_FLAG_HIDDEN);
