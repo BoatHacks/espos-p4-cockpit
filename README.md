@@ -8,9 +8,13 @@ The UI is **runtime-loadable**: instead of rebuilding firmware per layout change
 
 - Native LVGL UI on the 7B's MIPI-DSI panel, capacitive touch.
 - **JSON Layout Player (JLP)** — widgets driven by a JSON schema, hot-swap via `POST /layout`.
-- Built-in widget kinds: `label`, `toggle`, `arc`, `bar` (`button` planned).
-- Two-way SignalK binding: widgets observe paths, taps emit SK PUTs.
-- Zone-color tinting from SK path metadata (nominal / alert / warn / alarm / emergency).
+- Built-in widget kinds: `label`, `value`, `toggle`, `arc`, `bar`, `bargroup`, `button`, `notifications`.
+- Two-way SignalK binding: widgets observe paths, taps emit SK PUTs (bool, int, float, string, notification ACK).
+- **Zone-color tinting** from SK path metadata (nominal / alert / warn / alarm / emergency), maritime-helm palette.
+- **Notifications subsystem** — subscribes to `notifications.*`, surfaces a full-screen alert overlay when any pending notification meets the configured `min_state`, ACK button PUTs the cleared state back as a delta.
+- **Idle backlight dimmer** — configurable timeout + dim-to brightness per layout. Touch, an incoming notification, or a fresh push all wake the panel.
+- **Per-widget colors** — optional `bg_color` / `fg_color` overrides (zone state still wins for alarm cases).
+- **Configurable font size** on `label` / `value` widgets via `display.font_size`.
 - Always-on status overlay (WiFi, SK WS, N2K rx age, heap, uptime) survives every layout swap.
 - **NMEA 2000 gateway** — TWAI receiver/transmitter plus a candump-style TCP server (port 2599) so the bus is reachable from a laptop.
 - **Persistence** — successful pushes are saved to LittleFS so the layout survives a power cycle, with a compiled-in default fallback.
@@ -32,9 +36,9 @@ If a pushed or fetched layout fails parse/validate/build, the previous layout st
 
 | Port | Method | Endpoint        | Purpose                                       |
 |------|--------|-----------------|-----------------------------------------------|
-| 8081 | GET    | `/hello`        | Capability descriptor (schema, widgets, display, active layout) |
+| 8081 | GET    | `/hello`        | Capability descriptor (schema, widgets, display, active layout, screenshot formats) |
 | 8081 | POST   | `/layout`       | Apply a layout JSON (≤64 KB), atomic swap + LittleFS persist |
-| 8081 | GET    | `/screenshot`   | RGB565 BMP framebuffer dump (for designer overlay) |
+| 8081 | GET    | `/screenshot`   | Framebuffer dump. Default: software-encoded JPEG. `?fmt=bmp` for the legacy RGB565 BMP. |
 | 8081 | GET    | `/healthz`      | Liveness probe                                |
 | 8080 | POST   | (firmware OTA)  | Upload a new firmware bin                     |
 | 2599 | TCP    | (candump)       | Stream raw N2K frames in candump format       |
@@ -55,17 +59,20 @@ The full contract — request/response shapes, schema, widget fields, error code
         │ JLP LayoutManager (event_loop task, LVGL-only)│
         │  parse → validate → stage (hidden) → swap     │
         │                                  → LittleFS   │
+        │                  → idle_dimmer.configure(...)  │
+        │                  → alert_overlay.configure(...)│
         └───────────────────────────────────────────────┘
               │                                  ▲
-              │ creates                          │ subject updates
-              ▼                                  │
-   ┌───────────────────────┐         ┌─────────────────────┐
-   │ LVGL widget tree      │         │ SubjectRegistry +   │
-   │ (label/toggle/arc/bar)│         │ ZoneRegistry        │
-   └───────────────────────┘         └─────────────────────┘
-                                              ▲
-                                              │ deltas + meta
-                                              │
+              │ creates                          │ subject updates +
+              ▼                                  │ zone meta + notifs
+   ┌───────────────────────┐         ┌──────────────────────────┐
+   │ LVGL widget tree      │         │ Subject + Zone +         │
+   │ label / value /       │         │ Notifications registries │
+   │ toggle / arc / bar /  │         └──────────────────────────┘
+   │ bargroup / button /   │                  ▲
+   │ notifications         │                  │
+   └───────────────────────┘                  │ on_meta / on_value
+                                              │ + REST /meta fetch
                                        ┌──────────────┐
                                        │ SensESP WS   │──> SK server
                                        │ (sendMeta=all)│
@@ -78,7 +85,30 @@ The full contract — request/response shapes, schema, widget fields, error code
 
 LVGL is single-threaded. The HTTP task parses + validates a posted layout, then trampolines the build/swap onto the `event_loop` task via `event_loop()->onDelay(0, ...)` so only one task ever touches LVGL.
 
-The status overlay sits **above** the layout tabview in z-order and is created once at boot; it survives every layout swap and cannot be specified or hidden via JSON (a user-shipped blank layout still shows WiFi/SK/N2K state).
+The **status overlay** sits above the layout tabview in z-order and is created once at boot; it survives every layout swap. The **alert overlay** sits above the status overlay and pops up whenever an incoming notification clears the configured `min_state` threshold.
+
+## Idle backlight dimmer
+
+Layouts can opt the device into a power-save mode via the top-level `display` block:
+
+```jsonc
+{
+  "schema": 1,
+  "name": "Helm",
+  "display": {
+    "idle_timeout_sec": 300,   // 0 / omitted = always on
+    "idle_dim_pct": 80         // 0-100, default 80
+  },
+  "screens": [...]
+}
+```
+
+Hardware note: the Waveshare 7B's GT911 touch controller's sensitivity drops sharply as soon as the LCD backlight dims, because the LCD's continued sync signals dominate the touch sensing layer. **Tap-wake is only reliable at brightnesses close to full.** The 80 % default reads as clearly "asleep" while keeping tap-wake working. Lower dim levels save more power but only notifications and fresh layout pushes will then wake the panel.
+
+Wake sources:
+- any touch (always, but only effective at high `idle_dim_pct`)
+- any incoming SignalK notification at or above the configured `min_state`
+- a fresh `POST /layout`
 
 ## Build & flash
 
@@ -93,7 +123,7 @@ nc <device-ip> 2323                    # remote log stream
 
 Target: `esp32-p4`, 16 MB flash, PSRAM enabled, LittleFS partition. See [platformio.ini](platformio.ini).
 
-The firmware currently depends on a local checkout of [SensESP](https://github.com/SignalK/SensESP) with the `sendMeta=all` WS feature ([PR #965](https://github.com/SignalK/SensESP/pull/965)) cherry-picked — the WS meta stream is how widgets learn zone definitions for color tinting. Once PR #965 merges, the symlink in `platformio.ini` can drop and the upstream library can be pinned.
+The firmware currently depends on a local checkout of [SensESP](https://github.com/SignalK/SensESP) (branch `local/jlp-bridge`) which carries the `sendMeta=all` WS feature + `on_meta` / `on_value` hooks — the WS meta stream is how widgets learn zone definitions for color tinting. Revert to upstream once the matching PRs merge.
 
 ## Push your first layout
 
@@ -111,6 +141,7 @@ Or open the SK admin UI, launch **HMI Designer**, point it at `http://<device-ip
 
 ## Related projects
 
-- [signalk-hmi-designer](https://github.com/dirkwa/signalk-hmi-designer) — the SignalK webapp that designs and pushes layouts.
-- **sensesp-cockpit-display** — shared HAL + OTA + remote-log library for the Waveshare 7B (linked as a local symlink in `platformio.ini`).
+- [signalk-hmi-designer](https://github.com/dirkwa/signalk-hmi-designer) — the SignalK webapp that designs and pushes layouts (drag-and-drop canvas, pixel-perfect WASM preview, live mirror mode).
+- [sensesp-p4-cockpit-wasm](https://github.com/dirkwa/sensesp-p4-cockpit-wasm) — the same `widget_factory.cpp` compiled to WebAssembly so the designer can render layouts pixel-identically to the device without one being connected.
+- **sensesp-cockpit-display** — shared HAL (display, touch, idle backlight) + OTA + remote-log library for the Waveshare 7B (linked as a local symlink in `platformio.ini`).
 - **sensesp-n2k-gateway** — the N2K-over-TWAI + candump TCP gateway library (also a local symlink).

@@ -83,9 +83,12 @@ Failure response (400 / 422 / 500):
 
 ### `GET /screenshot`
 
-Returns the current framebuffer as a **16-bit RGB565 BMP** — a standard 70-byte BMP header (BITMAPINFOHEADER + BI_BITFIELDS RGB565 masks) followed by bottom-up raw pixels. Designed for the designer's overlay-and-align workflow; not a stable streaming protocol.
+Returns the current framebuffer.
 
-Content-Type: `image/bmp`.
+- Default (`/screenshot` or `?fmt=jpeg`): **JPEG** encoded in software via `esp_new_jpeg` from an RGB565→RGB888 conversion in PSRAM. Content-Type: `image/jpeg`. Designed for the designer's live-mirror preview mode.
+- Legacy (`?fmt=bmp`): **16-bit RGB565 BMP** — a standard 70-byte BMP header (BITMAPINFOHEADER + BI_BITFIELDS RGB565 masks) followed by bottom-up raw pixels. Content-Type: `image/bmp`.
+
+`/hello.screenshot.formats` advertises which encodings the device supports.
 
 ### `GET /healthz`
 
@@ -168,7 +171,16 @@ Displayed value = `(raw × scale) + offset`, formatted to `decimals`, then `unit
 #### `label`
 - Extra fields: none.
 - Renders `label` (caption) above the formatted value from `bind`. If only `label` is set, renders a static caption.
+- When `bind` resolves to a path with a `description` field in SK meta, the description text is preferred over the formatted numeric value (so a switch-state path shows "BMS DnC" instead of "1.0").
+- `display.font_size` (int, optional) — pick a compiled Montserrat size (14, 16, 20, 28, 36). Otherwise autoscales to the widget's height.
 - Subject kind: `Float` if `display` set, else `String`.
+
+#### `value`
+- Extra fields: none beyond the common set.
+- Big-number readout tile. Caption (`label`) sits at the top-left; the formatted value fills the centre; the `display.unit` is rendered separately at the bottom-right (so it stays visible even when the value has many digits).
+- `display.font_size` (int, optional) — same compiled-Montserrat options as `label`.
+- Background follows SK zone state of `bind` (alarm wins over `bg_color`).
+- Subject kind: `Float`.
 
 #### `toggle`
 - Extra fields: none.
