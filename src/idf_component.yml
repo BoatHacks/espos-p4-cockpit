@@ -16,3 +16,11 @@ dependencies:
     version: "==2.12.7"
     rules:
       - if: "target in [esp32p4, esp32h2]"
+  # Used by the /screenshot endpoint to return JPEG instead of raw 16-bit
+  # BMP. BMP is ~1.2 MB at 1024x600 and takes ~6 s over esp_hosted SDIO,
+  # making it unusable for the designer's live-mirror mode. JPEG drops
+  # the wire size to ~30-50 KB and the encode time to well under a
+  # second on P4 (no hardware JPEG today; this is the software encoder,
+  # but it's small enough for our 1-2 fps poll budget).
+  espressif/esp_new_jpeg:
+    version: "^1.0.0"

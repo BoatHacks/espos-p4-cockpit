@@ -1,0 +1,473 @@
+#include "http_api.h"
+
+#include "esp_http_server.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "esp_heap_caps.h"
+#include "esp_jpeg_enc.h"
+#include "esp_timer.h"
+#include "lvgl.h"
+#include "sensesp.h"
+#include <cstring>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "../layout/layout_manager.h"
+
+static const char* TAG = "jlp.http";
+
+namespace jlp {
+
+namespace {
+
+constexpr size_t kMaxBodyBytes = 64 * 1024;
+
+esp_err_t layout_post(httpd_req_t* req) {
+  if (req->content_len == 0) {
+    httpd_resp_set_status(req, "400 Bad Request");
+    httpd_resp_sendstr(req, "{\"ok\":false,\"err\":\"empty body\"}");
+    return ESP_OK;
+  }
+  if ((size_t)req->content_len > kMaxBodyBytes) {
+    httpd_resp_set_status(req, "413 Payload Too Large");
+    httpd_resp_sendstr(req, "{\"ok\":false,\"err\":\"body too large\"}");
+    return ESP_OK;
+  }
+
+  std::string body;
+  body.resize(req->content_len);
+  int total = 0;
+  while (total < req->content_len) {
+    int n = httpd_req_recv(req, &body[total], req->content_len - total);
+    if (n <= 0) {
+      if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+      httpd_resp_set_status(req, "500 Internal Server Error");
+      httpd_resp_sendstr(req, "{\"ok\":false,\"err\":\"recv failed\"}");
+      return ESP_FAIL;
+    }
+    total += n;
+  }
+
+  // Hop onto the event_loop task to do the swap, then wait for the
+  // result. The handler is design-time only — brief blocking is fine.
+  auto result = std::make_shared<ApplyResult>();
+  SemaphoreHandle_t done = xSemaphoreCreateBinary();
+  if (!done) {
+    httpd_resp_set_status(req, "500 Internal Server Error");
+    httpd_resp_sendstr(req, "{\"ok\":false,\"err\":\"semaphore\"}");
+    return ESP_FAIL;
+  }
+
+  sensesp::event_loop()->onDelay(0, [body, result, done]() mutable {
+    *result = layout_manager().apply(body, ApplySource::PostLayout);
+    xSemaphoreGive(done);
+  });
+
+  // 25s budget for the apply: build is fast (~hundreds of ms for a
+  // 20-widget layout), but the event_loop task may be backed up
+  // draining incoming SK WS deltas after a server reconnect. 25s
+  // covers that drain without giving up on a healthy layout. The
+  // designer-side proxy timeout is 30s, which leaves room for the
+  // 504 to actually reach the browser instead of being aborted.
+  if (xSemaphoreTake(done, pdMS_TO_TICKS(25000)) != pdTRUE) {
+    vSemaphoreDelete(done);
+    httpd_resp_set_status(req, "504 Gateway Timeout");
+    httpd_resp_sendstr(req,
+                       "{\"ok\":false,\"err\":\"apply timed out\"}");
+    return ESP_OK;
+  }
+  vSemaphoreDelete(done);
+
+  httpd_resp_set_type(req, "application/json");
+  if (!result->ok) {
+    httpd_resp_set_status(req, "400 Bad Request");
+    char buf[256];
+    snprintf(buf, sizeof(buf), "{\"ok\":false,\"err\":\"%s\"}",
+             result->err.c_str());
+    httpd_resp_sendstr(req, buf);
+    return ESP_OK;
+  }
+
+  char buf[384];
+  if (!result->warning.empty()) {
+    snprintf(buf, sizeof(buf),
+             "{\"ok\":true,\"name\":\"%s\",\"screens\":%u,\"widgets\":%u,"
+             "\"warning\":\"%s\"}",
+             result->name.c_str(), result->screens, result->widgets,
+             result->warning.c_str());
+  } else {
+    snprintf(buf, sizeof(buf),
+             "{\"ok\":true,\"name\":\"%s\",\"screens\":%u,\"widgets\":%u}",
+             result->name.c_str(), result->screens, result->widgets);
+  }
+  httpd_resp_sendstr(req, buf);
+  return ESP_OK;
+}
+
+esp_err_t healthz_get(httpd_req_t* req) {
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_sendstr(req, "{\"ok\":true}");
+  return ESP_OK;
+}
+
+// --- screenshot endpoint -------------------------------------------------
+//
+// GET /screenshot                — JPEG (default; cheap enough for the
+//                                  designer's live-mirror poll).
+// GET /screenshot?fmt=bmp        — 16-bit BMP, raw RGB565. Larger and
+//                                  slower (~1.2 MB at 1024x600, ~6 s
+//                                  over esp_hosted SDIO) but
+//                                  bit-perfect and decodes natively in
+//                                  any browser; kept for debug diffs.
+// GET /screenshot?fmt=jpeg       — explicit JPEG; same as no arg.
+//
+// JPEG uses the espressif/esp_new_jpeg software encoder (no HW JPEG on
+// P4 today). RGB565 → JPEG at quality 70 is ~30-50 KB for our 1024×600
+// frame and encodes in well under a second, which is fast enough for
+// 1-2 fps polling from the designer.
+
+// Builds a 70-byte BMP header for a width*height image stored as
+// 16-bit RGB565 with bit masks. BMP rows are bottom-up.
+static void bmp_header_rgb565(uint8_t out[70], uint32_t w, uint32_t h) {
+  const uint32_t row_bytes = w * 2;
+  const uint32_t pixel_bytes = row_bytes * h;
+  const uint32_t file_size = 70 + pixel_bytes;
+  const uint32_t pixel_offset = 70;
+
+  auto put32 = [&](size_t at, uint32_t v) {
+    out[at] = v & 0xff; out[at+1] = (v>>8)&0xff;
+    out[at+2] = (v>>16)&0xff; out[at+3] = (v>>24)&0xff;
+  };
+  auto put16 = [&](size_t at, uint16_t v) {
+    out[at] = v & 0xff; out[at+1] = (v>>8)&0xff;
+  };
+  std::memset(out, 0, 70);
+  out[0]='B'; out[1]='M';
+  put32(2, file_size);
+  put32(10, pixel_offset);
+  put32(14, 56);          // BITMAPV3INFOHEADER
+  put32(18, w);
+  put32(22, h);           // positive: bottom-up — we'll write rows reversed
+  put16(26, 1);           // planes
+  put16(28, 16);          // bpp
+  put32(30, 3);           // BI_BITFIELDS
+  put32(34, pixel_bytes);
+  put32(38, 2835);        // x ppm (72dpi)
+  put32(42, 2835);        // y ppm
+  put32(54, 0xF800);      // R mask (top 5 bits of high byte)
+  put32(58, 0x07E0);      // G mask
+  put32(62, 0x001F);      // B mask
+  put32(66, 0x00000000);  // A mask (unused)
+}
+
+struct ScreenshotResult {
+  bool ok = false;
+  std::string err;
+  uint32_t w = 0;
+  uint32_t h = 0;
+  // Owned pixel buffer (RGB565, top-down as returned by lv_snapshot_take).
+  // The endpoint copies rows from this into the HTTP response bottom-up
+  // to honour BMP row order.
+  std::vector<uint8_t> pixels;
+};
+
+// Runs on the event_loop task. Takes a snapshot of the active screen.
+// LVGL's internal allocator can't give us a 1.2MB RGB565 buffer
+// (it's not PSRAM-aware in this configuration), so we allocate the
+// pixel store ourselves in PSRAM and wrap it via lv_draw_buf_init.
+static void take_screenshot(ScreenshotResult* out) {
+  lv_obj_t* scr = lv_screen_active();
+  if (!scr) { out->err = "no active screen"; return; }
+  const int32_t w = LV_HOR_RES;
+  const int32_t h = LV_VER_RES;
+  const uint32_t stride = w * 2;
+  const uint32_t size = stride * h;
+  uint8_t* pixels = (uint8_t*)heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
+  if (!pixels) {
+    out->err = "PSRAM alloc failed";
+    return;
+  }
+  lv_draw_buf_t buf;
+  if (lv_draw_buf_init(&buf, w, h, LV_COLOR_FORMAT_RGB565, stride, pixels,
+                       size) != LV_RESULT_OK) {
+    heap_caps_free(pixels);
+    out->err = "lv_draw_buf_init failed";
+    return;
+  }
+  if (lv_snapshot_take_to_draw_buf(scr, LV_COLOR_FORMAT_RGB565, &buf) !=
+      LV_RESULT_OK) {
+    heap_caps_free(pixels);
+    out->err = "lv_snapshot_take_to_draw_buf failed";
+    return;
+  }
+  out->w = w;
+  out->h = h;
+  // Move out of the lock-held LVGL world before the slow HTTP send.
+  out->pixels.assign(pixels, pixels + size);
+  heap_caps_free(pixels);
+  out->ok = true;
+}
+
+// Encode the captured RGB565 frame to JPEG. Returns the encoded bytes in
+// `out` on success. The encoder is opened/closed per call: encode is
+// >100 ms vs ~1 ms open/close, and statelessness keeps things safe
+// across concurrent /screenshot requests.
+//
+// The precompiled esp_new_jpeg blob shipped for P4 only accepts
+// JPEG_PIXEL_FORMAT_RGB888 input (RGB565_LE errors with "src type
+// error" at jpeg_enc_open). Convert RGB565 → RGB888 in PSRAM before
+// encoding; the conversion is ~1.8 MB for a 1024x600 frame and runs in
+// under 10 ms.
+static bool encode_rgb565_to_jpeg(const ScreenshotResult& src,
+                                  std::vector<uint8_t>* out,
+                                  std::string* err) {
+  const size_t px_count = (size_t)src.w * src.h;
+  const size_t rgb888_size = px_count * 3;
+  uint8_t* rgb888 =
+      (uint8_t*)heap_caps_malloc(rgb888_size, MALLOC_CAP_SPIRAM);
+  if (!rgb888) {
+    *err = "rgb888 PSRAM alloc failed";
+    return false;
+  }
+  // RGB565 little-endian → RGB888. LVGL writes pixels low-byte first,
+  // and the bits are R[15..11] G[10..5] B[4..0]. We expand 5/6/5 to
+  // 8/8/8 with bit replication (the standard way: copy the top bits
+  // into the low bits so 0x1F maps to 0xFF rather than 0xF8).
+  const uint8_t* p = src.pixels.data();
+  uint8_t* q = rgb888;
+  for (size_t i = 0; i < px_count; ++i) {
+    const uint16_t v = (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+    const uint8_t r5 = (v >> 11) & 0x1F;
+    const uint8_t g6 = (v >>  5) & 0x3F;
+    const uint8_t b5 =  v        & 0x1F;
+    q[0] = (uint8_t)((r5 << 3) | (r5 >> 2));
+    q[1] = (uint8_t)((g6 << 2) | (g6 >> 4));
+    q[2] = (uint8_t)((b5 << 3) | (b5 >> 2));
+    p += 2;
+    q += 3;
+  }
+
+  jpeg_enc_config_t cfg = DEFAULT_JPEG_ENC_CONFIG();
+  cfg.width       = (int)src.w;
+  cfg.height      = (int)src.h;
+  cfg.src_type    = JPEG_PIXEL_FORMAT_RGB888;
+  cfg.subsampling = JPEG_SUBSAMPLE_420;
+  cfg.quality     = 70;
+  jpeg_enc_handle_t enc = nullptr;
+  if (jpeg_enc_open(&cfg, &enc) != JPEG_ERR_OK || !enc) {
+    heap_caps_free(rgb888);
+    *err = "jpeg_enc_open failed";
+    return false;
+  }
+  // JPEG output cannot exceed the raw RGB888 size in practice; size the
+  // sink to that as a safe upper bound.
+  uint8_t* sink =
+      (uint8_t*)heap_caps_malloc(rgb888_size, MALLOC_CAP_SPIRAM);
+  if (!sink) {
+    jpeg_enc_close(enc);
+    heap_caps_free(rgb888);
+    *err = "jpeg sink PSRAM alloc failed";
+    return false;
+  }
+  int written = 0;
+  jpeg_error_t rc =
+      jpeg_enc_process(enc, rgb888, (int)rgb888_size,
+                       sink, (int)rgb888_size, &written);
+  jpeg_enc_close(enc);
+  heap_caps_free(rgb888);
+  if (rc != JPEG_ERR_OK || written <= 0) {
+    heap_caps_free(sink);
+    *err = std::string("jpeg_enc_process rc=") + std::to_string((int)rc);
+    return false;
+  }
+  out->assign(sink, sink + written);
+  heap_caps_free(sink);
+  return true;
+}
+
+esp_err_t screenshot_get(httpd_req_t* req) {
+  // Pick format from `?fmt=`. Default jpeg — that's what the designer's
+  // live mirror polls. Anything not "bmp" falls through to jpeg.
+  bool want_bmp = false;
+  size_t qlen = httpd_req_get_url_query_len(req);
+  if (qlen > 0 && qlen < 64) {
+    char query[64];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+      char fmt[16] = {};
+      if (httpd_query_key_value(query, "fmt", fmt, sizeof(fmt)) == ESP_OK) {
+        if (strcmp(fmt, "bmp") == 0) want_bmp = true;
+      }
+    }
+  }
+
+  auto result = std::make_shared<ScreenshotResult>();
+  SemaphoreHandle_t done = xSemaphoreCreateBinary();
+  if (!done) {
+    httpd_resp_set_status(req, "500 Internal Server Error");
+    httpd_resp_sendstr(req, "semaphore alloc failed");
+    return ESP_FAIL;
+  }
+  sensesp::event_loop()->onDelay(0, [result, done]() {
+    take_screenshot(result.get());
+    xSemaphoreGive(done);
+  });
+  if (xSemaphoreTake(done, pdMS_TO_TICKS(5000)) != pdTRUE) {
+    vSemaphoreDelete(done);
+    httpd_resp_set_status(req, "504 Gateway Timeout");
+    httpd_resp_sendstr(req, "snapshot timeout");
+    return ESP_OK;
+  }
+  vSemaphoreDelete(done);
+
+  if (!result->ok) {
+    httpd_resp_set_status(req, "500 Internal Server Error");
+    httpd_resp_sendstr(req, result->err.c_str());
+    return ESP_OK;
+  }
+
+  const uint32_t w = result->w, h = result->h;
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+
+  if (want_bmp) {
+    const uint32_t row_bytes = w * 2;
+    uint8_t header[70];
+    bmp_header_rgb565(header, w, h);
+    httpd_resp_set_type(req, "image/bmp");
+    if (httpd_resp_send_chunk(req, (const char*)header, sizeof(header)) !=
+        ESP_OK) {
+      return ESP_FAIL;
+    }
+    // BMP rows are bottom-up; LVGL gives top-down. Send last row first.
+    for (int32_t y = (int32_t)h - 1; y >= 0; --y) {
+      const char* row =
+          reinterpret_cast<const char*>(&result->pixels[y * row_bytes]);
+      if (httpd_resp_send_chunk(req, row, row_bytes) != ESP_OK) {
+        return ESP_FAIL;
+      }
+    }
+    httpd_resp_send_chunk(req, nullptr, 0);
+    ESP_LOGI(TAG, "screenshot[bmp] %ux%u (%u bytes)", (unsigned)w,
+             (unsigned)h, (unsigned)(70 + row_bytes * h));
+    return ESP_OK;
+  }
+
+  // JPEG path.
+  std::vector<uint8_t> jpeg_out;
+  std::string err;
+  const int64_t t0 = esp_timer_get_time();
+  if (!encode_rgb565_to_jpeg(*result, &jpeg_out, &err)) {
+    httpd_resp_set_status(req, "500 Internal Server Error");
+    httpd_resp_sendstr(req, err.c_str());
+    return ESP_OK;
+  }
+  const int64_t t1 = esp_timer_get_time();
+  httpd_resp_set_type(req, "image/jpeg");
+  if (httpd_resp_send(req, (const char*)jpeg_out.data(),
+                      jpeg_out.size()) != ESP_OK) {
+    return ESP_FAIL;
+  }
+  ESP_LOGI(TAG, "screenshot[jpeg] %ux%u (%u bytes, encode %lld ms)",
+           (unsigned)w, (unsigned)h, (unsigned)jpeg_out.size(),
+           (long long)((t1 - t0) / 1000));
+  return ESP_OK;
+}
+
+esp_err_t hello_get(httpd_req_t* req) {
+  httpd_resp_set_type(req, "application/json");
+  const std::string& name = layout_manager().active_name();
+  ApplySource src = layout_manager().active_source();
+  const char* src_str = "boot";
+  switch (src) {
+    case ApplySource::BootStore:    src_str = "littlefs";    break;
+    case ApplySource::BootDefault:  src_str = "default";     break;
+    case ApplySource::BootFetched:  src_str = "applicationData"; break;
+    case ApplySource::PostLayout:   src_str = "post";        break;
+    case ApplySource::Boot: default: src_str = "boot";       break;
+  }
+  // Single buffer; widget catalog is small enough to inline.
+  char buf[1792];
+  snprintf(buf, sizeof(buf),
+      "{"
+        "\"schema\":1,"
+        "\"name\":\"%s\","
+        "\"hostname\":\"p4-cockpit\","
+        "\"firmware\":\"p4-cockpit-jlp-0.1.0\","
+        "\"display\":{\"w\":1024,\"h\":600,\"idle_timeout\":true,\"idle_dim_pct\":true},"
+        "\"widgets\":{"
+          "\"label\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\",\"bg_color\",\"fg_color\"]},"
+          "\"value\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\",\"bg_color\",\"fg_color\"]},"
+          "\"toggle\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"bg_color\",\"fg_color\"]},"
+          "\"arc\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\",\"min\",\"max\",\"start_angle\",\"end_angle\",\"ticks\",\"tick_labels\",\"bands\",\"bg_color\",\"fg_color\"]},"
+          "\"bar\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\",\"min\",\"max\",\"vertical\",\"bg_color\",\"fg_color\"]},"
+          "\"bargroup\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bars\",\"bg_color\",\"fg_color\"]},"
+          "\"button\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"press_value\",\"release_value\",\"hold_ms\",\"bg_color\",\"fg_color\"]},"
+          "\"notifications\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"max_rows\",\"row_height\",\"columns\",\"row_color_field\",\"include_cleared\",\"bg_color\",\"fg_color\"]}"
+        "},"
+        "\"screenshot\":{\"formats\":[\"jpeg\",\"bmp\"]},"
+        "\"active_layout_name\":\"%s\","
+        "\"layout_source\":\"%s\""
+      "}",
+      name.c_str(), name.c_str(), src_str);
+  httpd_resp_sendstr(req, buf);
+  return ESP_OK;
+}
+
+}  // namespace
+
+void http_api_start(uint16_t port) {
+  httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+  config.server_port = port;
+  config.stack_size = 8192;
+  config.ctrl_port = 32768 + port;  // unique per httpd instance
+  config.recv_wait_timeout = 120;
+  config.send_wait_timeout = 30;
+  config.lru_purge_enable = true;
+  config.max_uri_handlers = 5;
+
+  httpd_handle_t server = nullptr;
+  if (httpd_start(&server, &config) != ESP_OK) {
+    ESP_LOGE(TAG, "failed to start jlp api on port %u", port);
+    return;
+  }
+
+  httpd_uri_t layout_uri = {
+      .uri = "/layout",
+      .method = HTTP_POST,
+      .handler = layout_post,
+      .user_ctx = nullptr,
+  };
+  httpd_register_uri_handler(server, &layout_uri);
+
+  httpd_uri_t hz_uri = {
+      .uri = "/healthz",
+      .method = HTTP_GET,
+      .handler = healthz_get,
+      .user_ctx = nullptr,
+  };
+  httpd_register_uri_handler(server, &hz_uri);
+
+  httpd_uri_t hello_uri = {
+      .uri = "/hello",
+      .method = HTTP_GET,
+      .handler = hello_get,
+      .user_ctx = nullptr,
+  };
+  httpd_register_uri_handler(server, &hello_uri);
+
+  httpd_uri_t screenshot_uri = {
+      .uri = "/screenshot",
+      .method = HTTP_GET,
+      .handler = screenshot_get,
+      .user_ctx = nullptr,
+  };
+  httpd_register_uri_handler(server, &screenshot_uri);
+
+  ESP_LOGI(
+      TAG,
+      "jlp api on :%u (POST /layout, GET /hello, /healthz, /screenshot)",
+      port);
+}
+
+}  // namespace jlp

@@ -1,155 +1,162 @@
 /**
- * ESP32-P4 Cockpit — cockpit display with switches loaded from
- * Maretron N2KView config import.
+ * ESP32-P4 Cockpit — JSON Layout Player (jlp)
+ *
+ * Step 2: status overlay added. The overlay is the only always-on UI
+ * element; future layout swaps reparent under overlay().content_root().
  */
 
 #include <Arduino.h>
 #include <WiFi.h>
 #include <cstdio>
-#include <map>
+#include <set>
 #include <string>
+#include <vector>
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "lvgl.h"
 
-#include "sensesp_cockpit_display.h"
 #include "sensesp_cockpit_display/hal/boards/waveshare_7b.h"
+#include "sensesp_cockpit_display/lvgl/lv_drivers.h"
+#include "sensesp_cockpit_display/net/http_ota.h"
+#include "sensesp_cockpit_display/net/remote_log.h"
 #include "sensesp_n2k_gateway.h"
-#include "sensesp_ble_gateway/ble_signalk_gateway.h"
-#include "sensesp_ble_gateway/esp_hosted_bluedroid_ble.h"
 #include "sensesp_app_builder.h"
 #include "sensesp/signalk/signalk_ws_client.h"
 #include "sensesp/system/lambda_consumer.h"
 
-#include "maretron_layout.h"
+#include "jlp/default_layout.h"
+#include "jlp/idle_dimmer.h"
+#include "jlp/layout/layout_manager.h"
+#include "jlp/layout/store.h"
+#include "jlp/net/http_api.h"
+#include "jlp/net/layout_fetch.h"
+#include "jlp/net/zone_fetch.h"
+#include "jlp/zone_registry.h"
+#include "jlp/net/mdns_announce.h"
+#include "jlp/status_overlay.h"
+#include "jlp/subject_registry.h"
+#include "jlp/alert_overlay.h"
+#include "jlp/notifications_registry.h"
+#include "jlp/wake_overlay.h"
+#include "jlp/zone_registry.h"
 
 using namespace sensesp;
 using namespace sensesp_cockpit_display;
-
-static std::vector<std::unique_ptr<SKSwitchBinding>> sw_bindings;
-static std::vector<std::unique_ptr<SKButtonBinding>> btn_bindings;
-static std::vector<std::unique_ptr<SKGaugeBinding>> gauge_bindings;
-static std::shared_ptr<sensesp::EspHostedBluedroidBLE> g_ble;
-static std::shared_ptr<sensesp::BLESignalKGateway> g_ble_gw;
-
-static void add_switch_from_config(SwitchPage* page,
-                                   const cockpit_config::Switch& def) {
-  char path[80];
-  snprintf(path, sizeof(path),
-           "electrical.switches.bank.%u.%u.state",
-           (unsigned)def.bank, (unsigned)def.channel);
-  auto* w = page->add_switch(def.label);
-  sw_bindings.push_back(std::make_unique<SKSwitchBinding>(String(path), w));
-}
-
-static void add_button_from_config(ButtonSwitchPage* page,
-                                   const cockpit_config::Switch& def) {
-  char path[80];
-  snprintf(path, sizeof(path),
-           "electrical.switches.bank.%u.%u.state",
-           (unsigned)def.bank, (unsigned)def.channel);
-  auto* b = page->add_switch(def.label);
-  btn_bindings.push_back(std::make_unique<SKButtonBinding>(String(path), b));
-}
-
-static void add_gauge(InstrumentPage* page, const char* label,
-                      const char* unit, const char* sk_path,
-                      std::function<float(float)> conv = nullptr,
-                      int decimals = 1) {
-  auto* w = page->add_gauge(label, unit);
-  gauge_bindings.push_back(
-      std::make_unique<SKGaugeBinding>(String(sk_path), w, conv, decimals));
-}
 
 void setup() {
   SetupLogging(ESP_LOG_INFO);
 
   auto* display = new Waveshare7BDisplay();
   auto* touch = new Waveshare7BTouch();
-  auto* ui = new CockpitUI(display, touch);
-  ui->init();
+  lvgl_init(display, touch);
+  jlp::overlay().init();
+  jlp::overlay().set_hostname("p4-cockpit");
+
+  jlp::layout_manager().init(jlp::overlay().content_root());
+
+  jlp::store_init();
+  std::string stored;
+  // Value-init so r.ok is false on the !store_read() path; Cppcheck
+  // flags the default-init form as a use-of-uninitialized-member.
+  jlp::ApplyResult r{};
+  if (jlp::store_read(&stored)) {
+    r = jlp::layout_manager().apply(stored, jlp::ApplySource::BootStore);
+    if (!r.ok) {
+      ESP_LOGW("main", "stored layout rejected (%s); falling back to default",
+               r.err.c_str());
+    }
+  }
+  if (!r.ok) {
+    r = jlp::layout_manager().apply(jlp::kDefaultLayoutJson,
+                                    jlp::ApplySource::BootDefault);
+    if (!r.ok) {
+      ESP_LOGE("main", "default layout rejected: %s", r.err.c_str());
+    }
+  }
 
   SensESPAppBuilder builder;
   auto app = builder.set_hostname("p4-cockpit")
                  ->set_wifi_client("MOIN", "Moin2018!")
-                 ->set_wifi_access_point("", "")  // disable soft-AP
-                 ->set_sk_server("192.168.0.148", 3000)
+                 ->set_wifi_access_point("", "")
+                 ->set_sk_server("192.168.0.148", 4100)
                  ->get_app();
-  // NOTE: set_wifi_access_point("","") above disables the captive-portal
-  // soft-AP. Without this, SensESP starts an AP on 192.168.4.1 at boot which
-  // binds port 80 and prevents the main HTTP web UI from starting.
-  // ArduinoOTA also previously stayed off — we use HTTP OTA on :8080 instead.
 
-  // Stream ESP_LOGx over TCP — connect with: nc <ip> 2323
+  // After every layout swap, restart the SK WS only when the new
+  // layout introduced bound paths SensESP isn't already subscribed
+  // to. (SensESP subscribes once at on_connected; listeners added
+  // later are silently ignored until reconnect — so we only pay the
+  // reconnect cost when there's a real subscription gap.)
+  //
+  // Deferred to a fresh event_loop tick so the apply() that invoked
+  // us can return to the HTTP task and signal its done-semaphore
+  // *before* we start tearing down the WS. ws->restart() is
+  // synchronous and can take several seconds on cold reconnect; if
+  // we ran it inline, POST /layout would 504 on every first-push-
+  // after-boot (the only case that introduces a brand-new path set
+  // relative to the empty known_paths_ map).
+  jlp::layout_manager().set_post_swap_hook(
+      [app](bool new_paths_introduced,
+            const std::set<std::string>& new_paths) {
+        if (!new_paths_introduced) return;
+        // Pull SK meta (zones + description) for just the newly-
+        // introduced paths via HTTP REST. The per-path endpoint is
+        // ~25 ms per path on a healthy LAN; the fetch task drives
+        // them serially so the burst stays small.
+        std::vector<std::string> v(new_paths.begin(), new_paths.end());
+        jlp::zone_fetch_for_paths("192.168.0.148", 4100, v);
+        // ws->restart() is intentionally NOT called here anymore.
+        // The reconnect floods event_loop with SK's initial-state
+        // burst for 30+ seconds, wedging the next push or
+        // /screenshot. New SKValueListeners created lazily by
+        // widget builds don't get an immediate subscription, but
+        // they DO get filled by the zone_fetch_for_paths REST
+        // value seed above — same effect on the widget render
+        // without the WS storm. Once the panel power-cycles or
+        // the WS happens to reconnect on its own, the lazy
+        // listeners join the next subscribe frame normally.
+      });
+
   remote_log_start(2323);
-
-  // HTTP OTA — reliable over slow WiFi (TCP, not UDP like ArduinoOTA)
-  // Usage: curl -X POST --data-binary @firmware.bin http://<ip>:8080/update
   http_ota_start(8080);
+  jlp::http_api_start(8081);
+  jlp::mdns_announce_start(8081);
+  jlp::zones().hook_sk_ws();
+  jlp::notifications().hook_sk_ws();
+  jlp::alert_overlay().init();
+  // wake overlay must be initialised AFTER alert_overlay so that
+  // alert_overlay's move_foreground (when it pops a notification)
+  // still wins z-order over the wake-overlay.
+  jlp::wake_overlay().init();
+  jlp::idle_dimmer().init();
+  // Any incoming notification wakes the panel so the alarm overlay is
+  // actually visible. Token discarded — dimmer is process-lifetime.
+  (void)jlp::notifications().on_change(
+      []() { jlp::idle_dimmer().wake(); });
+  jlp::layout_fetch_async_apply("192.168.0.148", 4100);
 
-  // --- Switches: all 53 using lightweight SwitchButton widgets ---
-  // Grouped by Maretron screen into short-named tabs.
-  std::map<std::string, std::string> tab_names = {
-      {"Switches",    "SW1"},
-      {"Switches 2",  "SW2"},
-      {"Watermaker",  "WM"},
-      {"Bilge Pumps", "Bilge"},
-  };
-  std::map<std::string, ButtonSwitchPage*> pages;
-  for (const auto& s : cockpit_config::get_switches()) {
-    std::string screen = s.screen ? s.screen : "Switches";
-    // Skip the Watermaker screen — its one switch is also on Switches 2
-    if (screen == "Watermaker") continue;
-
-    auto it = pages.find(screen);
-    ButtonSwitchPage* page;
-    if (it == pages.end()) {
-      auto name_it = tab_names.find(screen);
-      const char* tab = name_it != tab_names.end()
-                           ? name_it->second.c_str()
-                           : screen.c_str();
-      page = ui->add_button_switch_page(tab);
-      pages[screen] = page;
-    } else {
-      page = it->second;
-    }
-    add_button_from_config(page, s);
-  }
-  ESP_LOGI("main", "Loaded %u switches across %u pages",
-           (unsigned)btn_bindings.size(),
-           (unsigned)pages.size());
-  ui->finalize();
-
-  // --- Status page: only basic WS state binding ---
-  auto* status = ui->get_status_page();
+  // --- SK WS state into the overlay ---
   auto ws_client = app->get_ws_client();
   ws_client->connect_to(new LambdaConsumer<SKWSConnectionState>(
-      [status](SKWSConnectionState state) {
+      [](SKWSConnectionState state) {
         switch (state) {
           case SKWSConnectionState::kSKWSConnected:
-            status->sk_ws()->set_status(StatusLevel::kOk, "connected");
+            jlp::overlay().set_sk("ok");
             break;
           case SKWSConnectionState::kSKWSConnecting:
-            status->sk_ws()->set_status(StatusLevel::kWarning, "connecting");
+            jlp::overlay().set_sk("connecting");
             break;
           case SKWSConnectionState::kSKWSAuthorizing:
-            status->sk_ws()->set_status(StatusLevel::kWarning, "authorizing");
+            jlp::overlay().set_sk("auth");
             break;
           case SKWSConnectionState::kSKWSDisconnected:
           default:
-            status->sk_ws()->set_status(StatusLevel::kError, "disconnected");
+            jlp::overlay().set_sk("down");
             break;
         }
       }));
 
-  // --- BLE gateway (disabled for now — saturates WiFi, breaks OTA) ---
-  // TODO: re-enable once OTA over esp_hosted WiFi is stable
-  // g_ble = std::make_shared<sensesp::EspHostedBluedroidBLE>();
-  // g_ble_gw = std::make_shared<sensesp::BLESignalKGateway>(
-  //     g_ble, app->get_ws_client());
-  // g_ble_gw->start();
-
-  // --- N2K gateway ---
+  // --- N2K gateway (unchanged from cockpit firmware) ---
   auto* receiver =
       new TwaiReceiver(TwaiReceiverConfig::waveshare_touch_lcd_7b());
   auto* transmitter = new TwaiTransmitter();
@@ -158,9 +165,6 @@ void setup() {
   transmitter->start();
   n2k_server->start();
 
-  // Quiesce N2K when OTA starts — N2K traffic + candump TX saturates SDIO
-  // and stalls OTA. After OTA succeeds the device reboots; if it fails
-  // the user can power-cycle. No resume path needed.
   sensesp_cockpit_display::set_ota_quiesce_callback(
       [receiver, transmitter, n2k_server]() {
         n2k_server->stop();
@@ -168,11 +172,9 @@ void setup() {
         transmitter->stop();
       });
 
-  // Watchdog: reboot if WiFi disconnects, heap exhausts, or N2K rx
-  // is stalled *after we have seen at least one frame* (so we don't
-  // false-positive when the CAN bus is genuinely silent or
-  // disconnected). Every 30s; tolerate 3 consecutive failures.
-  event_loop()->onRepeat(30000, [receiver, n2k_server]() {
+  // Watchdog: reboot on WiFi loss, heap exhaustion, or N2K rx stall
+  // (only after we have ever received a frame).
+  event_loop()->onRepeat(30000, [receiver]() {
     static int consecutive_fail = 0;
     bool ok = true;
     const char* reason = "";
@@ -184,21 +186,18 @@ void setup() {
       ok = false;
       reason = "heap exhausted";
     } else if (receiver->ever_received() &&
-               n2k_server->connected_clients() > 0 &&
                receiver->seconds_since_last_rx() > 30) {
-      // We've seen N2K traffic before, SK is consuming, but no new
-      // frames for 30+s — TWAI / SDIO link likely wedged.
       ok = false;
-      reason = "n2k rx stalled (after previously active)";
+      reason = "n2k rx stalled";
     }
 
     if (!ok) {
       consecutive_fail++;
-      ESP_LOGW("watchdog", "health check FAIL %d/3: %s",
-               consecutive_fail, reason);
+      ESP_LOGW("watchdog", "health check FAIL %d/3: %s", consecutive_fail,
+               reason);
       if (consecutive_fail >= 3) {
         ESP_LOGE("watchdog", "rebooting due to: %s", reason);
-        vTaskDelay(pdMS_TO_TICKS(200));  // let log drain
+        vTaskDelay(pdMS_TO_TICKS(200));
         esp_restart();
       }
     } else {
@@ -206,64 +205,32 @@ void setup() {
     }
   });
 
-  // LVGL at ~30fps
-  event_loop()->onRepeat(33, [ui]() { ui->tick(); });
+  event_loop()->onRepeat(33, []() { lvgl_tick(); });
 
-  // Status page update every 1s
-  event_loop()->onRepeat(1000, [ui, receiver, n2k_server]() {
-    auto* status = ui->get_status_page();
-
+  // 1s status tick: WiFi / N2K / uptime / heap into the overlay.
+  event_loop()->onRepeat(1000, [receiver, n2k_server]() {
     if (WiFi.status() == WL_CONNECTED) {
-      char buf[32];
-      snprintf(buf, sizeof(buf), "%s (%d dBm)",
-               WiFi.SSID().c_str(), WiFi.RSSI());
-      status->wifi()->set_status(StatusLevel::kOk, buf);
-    } else {
-      status->wifi()->set_status(StatusLevel::kError, "disconnected");
-    }
-
-    int64_t rx_idle = receiver->seconds_since_last_rx();
-    if (!receiver->ever_received()) {
-      status->n2k()->set_status(StatusLevel::kWarning, "no frames yet");
-    } else if (rx_idle < 2) {
-      char buf[32];
-      snprintf(buf, sizeof(buf), "live, %u clients",
-               (unsigned)n2k_server->connected_clients());
-      status->n2k()->set_status(StatusLevel::kOk, buf);
-    } else {
       char buf[40];
-      snprintf(buf, sizeof(buf), "idle %llds, %u clients",
-               (long long)rx_idle,
-               (unsigned)n2k_server->connected_clients());
-      status->n2k()->set_status(StatusLevel::kWarning, buf);
-    }
-
-    if (g_ble && g_ble->is_scanning()) {
-      char buf[48];
-      snprintf(buf, sizeof(buf), "scanning, %u hits / %u posted",
-               (unsigned)g_ble->scan_hit_count(),
-               (unsigned)(g_ble_gw ? g_ble_gw->advertisements_posted() : 0));
-      status->ble()->set_status(StatusLevel::kOk, buf);
-    } else if (g_ble) {
-      status->ble()->set_status(StatusLevel::kWarning, "not scanning");
+      snprintf(buf, sizeof(buf), "%s %ddBm", WiFi.SSID().c_str(),
+               WiFi.RSSI());
+      jlp::overlay().set_wifi(buf);
     } else {
-      status->ble()->set_status(StatusLevel::kError, "no controller");
+      jlp::overlay().set_wifi("down");
     }
 
-    status->update_info(
-        millis() / 1000, esp_get_free_heap_size(),
-        receiver->ever_received() ? rx_idle : -1,
-        n2k_server->connected_clients());
+    int64_t rx_idle =
+        receiver->ever_received() ? receiver->seconds_since_last_rx() : -1;
+    jlp::overlay().set_n2k(rx_idle, n2k_server->connected_clients());
+
+    jlp::overlay().set_uptime_heap(millis() / 1000,
+                                   esp_get_free_heap_size());
   });
 
-  // Heartbeat log
   event_loop()->onRepeat(5000, [receiver, n2k_server]() {
     int64_t rx_idle = receiver->seconds_since_last_rx();
-    ESP_LOGI("main",
-             "n2k: rx_idle=%llds cl=%u | btn=%u | heap=%lu",
+    ESP_LOGI("main", "n2k: rx_idle=%llds cl=%u | heap=%lu",
              (long long)(receiver->ever_received() ? rx_idle : -1),
              (unsigned)n2k_server->connected_clients(),
-             (unsigned)btn_bindings.size(),
              (unsigned long)esp_get_free_heap_size());
   });
 }

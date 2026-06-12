@@ -64,15 +64,8 @@ dependencies:
       type: service
     version: 1.0.18
   espressif/esp-sr:
-    component_hash: 70f252161c06dbf4e901025f83f119cbe53b6d94f19dd8018f5cd0d23df68ffa
+    component_hash: aa58d6a13a49600314a50a27240ccbd17e407f608216a3086d4868e0da2e8053
     dependencies:
-    - name: idf
-      require: private
-      version: '>=5.0'
-    - name: espressif/esp-dsp
-      registry_url: https://components.espressif.com
-      require: private
-      version: 1.8.0
     - name: espressif/cjson
       registry_url: https://components.espressif.com
       require: private
@@ -81,10 +74,17 @@ dependencies:
       registry_url: https://components.espressif.com
       require: private
       version: '>=0.2.0'
+    - name: espressif/esp-dsp
+      registry_url: https://components.espressif.com
+      require: private
+      version: 1.8.0
+    - name: idf
+      require: private
+      version: '>=5.0'
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 2.4.5
+    version: 2.4.6
   espressif/esp_hosted:
     component_hash: a424e4cf8de13b657d09f14dbd615cc946cffdc3f032509915d3058f4637fa72
     dependencies:
@@ -105,6 +105,22 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 2.0.1
+  espressif/esp_new_jpeg:
+    component_hash: e6af208a875abd0ecfc0213d3751a11b504b463ebde6930f24096047925fa5c1
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32
+    - esp32s2
+    - esp32s3
+    - esp32p4
+    - esp32c2
+    - esp32c3
+    - esp32c5
+    - esp32c6
+    version: 0.6.1
   espressif/esp_serial_slave_link:
     component_hash: ac1776806de0a6e371c84e87898bb983e19ce62aa7f1e2e5c4a3b0234a575d2c
     dependencies:
@@ -116,7 +132,7 @@ dependencies:
       type: service
     version: 1.1.2
   espressif/esp_wifi_remote:
-    component_hash: 5cdfb7b59d312d91c9dd6e8365be6b7b8a16eeef2a2b40d235c4a12f6d0ff769
+    component_hash: caa856dac9d28afacafbaefdaaef3fffdf3f9149c6011ba36ac680a13f5fc19f
     dependencies:
     - name: espressif/esp_hosted
       registry_url: https://components.espressif.com
@@ -134,7 +150,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 1.5.3
+    version: 1.6.1
   espressif/lan867x:
     component_hash: 651c9d6e3d96acb08bd5066144b12a12e94df0a6241127a0538d8680689de2c4
     dependencies:
@@ -227,6 +243,7 @@ direct_dependencies:
 - espressif/esp-sr
 - espressif/esp_hosted
 - espressif/esp_modem
+- espressif/esp_new_jpeg
 - espressif/esp_wifi_remote
 - espressif/lan867x
 - espressif/libsodium
@@ -234,6 +251,6 @@ direct_dependencies:
 - espressif/network_provisioning
 - idf
 - joltwallet/littlefs
-manifest_hash: 5e8f43696cca77561cfc31071e75fb4caf8c9deae776371d9be2ef8afcf07bac
+manifest_hash: 1a614a67621f378998c5098646f5ed766abf1e0f95d14984a65ee33dd977b2a3
 target: esp32p4
 version: 2.0.0
