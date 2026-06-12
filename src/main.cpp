@@ -134,10 +134,16 @@ void setup() {
   // still wins z-order over the wake-overlay.
   jlp::wake_overlay().init();
   jlp::idle_dimmer().init();
-  // Any incoming notification wakes the panel so the alarm overlay is
-  // actually visible. Token discarded — dimmer is process-lifetime.
-  (void)jlp::notifications().on_change(
-      []() { jlp::idle_dimmer().wake(); });
+  // An ESCALATING notification wakes the panel so the alarm overlay is
+  // actually visible. Clears and reductions don't — otherwise a brief
+  // transient alarm that auto-resolves (e.g. AC compressor inrush
+  // tripping InverterImbalance for a second) drags the helm out of
+  // idle every cycle. Token discarded — dimmer is process-lifetime.
+  (void)jlp::notifications().on_change([]() {
+    if (jlp::notifications().last_change_was_escalation()) {
+      jlp::idle_dimmer().wake();
+    }
+  });
   jlp::layout_fetch_async_apply("192.168.0.148", 4100);
 
   // --- SK WS state into the overlay ---
