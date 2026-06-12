@@ -63,8 +63,13 @@ void setup() {
   if (jlp::store_read(&stored)) {
     r = jlp::layout_manager().apply(stored, jlp::ApplySource::BootStore);
     if (!r.ok) {
-      ESP_LOGW("main", "stored layout rejected (%s); falling back to default",
+      ESP_LOGW("main", "stored layout rejected (%s); clearing + falling back",
                r.err.c_str());
+      // Drop the bad blob so the next boot doesn't keep re-reading and
+      // re-rejecting the same content. The user can push a fresh layout
+      // from the designer once the device is responsive; until then the
+      // compiled default applies (next branch below).
+      jlp::store_clear();
     }
   }
   if (!r.ok) {

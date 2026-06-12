@@ -19,4 +19,11 @@ bool store_read(std::string* out);
 // IO error. Caller must only call this after a successful layout swap.
 bool store_write_atomic(const std::string& json);
 
+// Remove the persisted layout. Called by main.cpp on boot when the
+// stored layout fails to apply, so subsequent boots skip straight to
+// the compiled default instead of re-trying the same bad blob.
+// Returns true if the file was removed or wasn't there to begin with;
+// false only on a real IO error.
+bool store_clear();
+
 }  // namespace jlp

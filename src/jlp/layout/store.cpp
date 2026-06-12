@@ -117,4 +117,18 @@ bool store_write_atomic(const std::string& json) {
   return false;
 }
 
+bool store_clear() {
+  if (!g_mounted) return false;
+  if (remove(kPath) == 0) {
+    ESP_LOGI(TAG, "cleared %s", kPath);
+    return true;
+  }
+  if (errno == ENOENT) {
+    // Already gone — same outcome as success from the caller's view.
+    return true;
+  }
+  ESP_LOGW(TAG, "clear %s failed: %s", kPath, strerror(errno));
+  return false;
+}
+
 }  // namespace jlp
