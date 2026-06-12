@@ -15,6 +15,13 @@ namespace jlp {
 
 void NotificationsRegistry::apply(const std::string& path_after_prefix,
                                   const JsonVariantConst& value) {
+  // Default: not an escalation. Each branch that fire_observers()
+  // sets this true only when a new notification appeared at >= Alert
+  // or an existing one rose to a more severe state. Reset at the top
+  // so a previous escalation doesn't bleed into a later non-event
+  // (the flag is read by main.cpp's wake hook only).
+  last_change_was_escalation_ = false;
+
   // Treat a null value (path cleared) as removal.
   if (value.isNull()) {
     // A cleared path re-arms any local ack: if it fires again it
@@ -66,9 +73,18 @@ void NotificationsRegistry::apply(const std::string& path_after_prefix,
     // No change.
     return;
   }
+  // Escalation = either a brand-new path firing at >= Alert, or an
+  // existing path going from a less-severe state to a more-severe
+  // one. Same-or-lower-severity updates (or pure message edits at
+  // the same level) don't qualify — the operator already saw the
+  // higher state on the previous fire.
+  const bool was_new = it == map_.end();
+  const NotState prev_state = was_new ? NotState::Normal : it->second.state;
+  last_change_was_escalation_ = n.state > prev_state;
   map_[path_after_prefix] = n;
-  ESP_LOGI(TAG, "%s = %s \"%s\"", path_after_prefix.c_str(),
-           not_state_name(n.state), n.message.c_str());
+  ESP_LOGI(TAG, "%s = %s \"%s\"%s", path_after_prefix.c_str(),
+           not_state_name(n.state), n.message.c_str(),
+           last_change_was_escalation_ ? " (escalation)" : "");
   fire_observers();
 }
 

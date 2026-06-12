@@ -100,6 +100,23 @@ class NotificationsRegistry {
   /** True if `path` is currently acknowledged. */
   bool is_acknowledged(const std::string& path_after_prefix) const;
 
+  /** True if the most-recent change that fired observers was an
+   *  escalation — i.e. a notification appeared or was raised to a
+   *  more severe state than what was previously stored for that
+   *  path. Clears (-> normal/nominal), severity reductions, and
+   *  message-only edits all return false.
+   *
+   *  Used by the wake hook in main.cpp to keep the panel from
+   *  lighting up when an existing notification simply clears
+   *  (e.g. a brief inverter-imbalance trip that auto-resolves
+   *  doesn't drag the helm out of idle).
+   *
+   *  Only meaningful when read inside an on_change() callback
+   *  on the event_loop task. */
+  bool last_change_was_escalation() const {
+    return last_change_was_escalation_;
+  }
+
   /** Register a change observer. Returns an opaque token; the caller
    *  must call `off_change(token)` before any captured pointer is
    *  destroyed. Fires on the event_loop task. */
@@ -133,6 +150,11 @@ class NotificationsRegistry {
   std::unordered_map<std::string, NotState> acked_;
   std::vector<Slot> observers_;
   ObserverToken next_token_ = 1;
+  // Set by apply() right before each fire_observers() call so that
+  // observers running on the same call stack can read it via
+  // last_change_was_escalation(). Reset to false at the top of every
+  // apply() invocation.
+  bool last_change_was_escalation_ = false;
 };
 
 NotificationsRegistry& notifications();
