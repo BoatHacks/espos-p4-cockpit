@@ -14,10 +14,13 @@ void mdns_announce_start(uint16_t api_port) {
   sensesp::event_loop()->onDelay(0, [api_port]() {
     sensesp::event_loop()->onDelay(0, [api_port]() {
       mdns_txt_item_t txt[] = {
+          // Keep widgets + firmware in lockstep with /hello in
+          // http_api.cpp. mDNS browsers use these for capability
+          // discovery before falling back to a real /hello fetch.
           {"schema",   "1"},
-          {"widgets",  "label,toggle,arc,bar"},
+          {"widgets",  "label,value,toggle,arc,bar,bargroup,button,notifications"},
           {"firmware", "p4-cockpit-jlp-0.1.0"},
-          {"api",      "/layout,/hello,/healthz"},
+          {"api",      "/layout,/hello,/healthz,/screenshot"},
       };
       esp_err_t err = mdns_service_add(
           NULL, "_signalk-player", "_tcp", api_port,

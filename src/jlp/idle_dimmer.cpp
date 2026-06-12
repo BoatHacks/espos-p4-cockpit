@@ -29,8 +29,8 @@ void IdleDimmer::set_on(bool on) {
     wake_overlay().show();
     d->set_brightness(dim_pct_);
   }
-  ESP_LOGI(TAG, "backlight %s (dim_pct=%u)", on ? "on" : "off",
-           (unsigned)dim_pct_);
+  ESP_LOGI(TAG, "backlight %s (pct=%u)", on ? "on" : "off",
+           (unsigned)(on ? on_brightness_pct_ : dim_pct_));
 }
 
 void IdleDimmer::init() {

@@ -57,7 +57,9 @@ void setup() {
 
   jlp::store_init();
   std::string stored;
-  jlp::ApplyResult r;
+  // Value-init so r.ok is false on the !store_read() path; Cppcheck
+  // flags the default-init form as a use-of-uninitialized-member.
+  jlp::ApplyResult r{};
   if (jlp::store_read(&stored)) {
     r = jlp::layout_manager().apply(stored, jlp::ApplySource::BootStore);
     if (!r.ok) {

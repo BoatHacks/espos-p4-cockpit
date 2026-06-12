@@ -393,7 +393,7 @@ esp_err_t hello_get(httpd_req_t* req) {
         "\"schema\":1,"
         "\"name\":\"%s\","
         "\"hostname\":\"p4-cockpit\","
-        "\"firmware\":\"p4-cockpit-jlp-0.2.0\","
+        "\"firmware\":\"p4-cockpit-jlp-0.1.0\","
         "\"display\":{\"w\":1024,\"h\":600,\"idle_timeout\":true,\"idle_dim_pct\":true},"
         "\"widgets\":{"
           "\"label\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\",\"bg_color\",\"fg_color\"]},"
