@@ -17,12 +17,24 @@ constexpr int kListenDelayMs = 1000;
 // `subject` via `lv_subject_set_*`. Returns the listener pointer so the
 // caller can store a teardown closure (though see note on SKListener
 // lifetime — it has no public destructor, so teardown is a no-op in v1).
+//
+// Ownership: the LambdaConsumer is handed to `connect_to` as a
+// shared_ptr, which captures it inside the observer lambda the
+// producer owns. The consumer therefore lives exactly as long as
+// the listener observes it — no orphaned `new LambdaConsumer<T>`
+// hanging on the heap for the device lifetime.
+//
+// The SKValueListener itself is still `new`-allocated and not freed,
+// because SensESP's SKListener::listeners_ static vector has no
+// removal API (a stale entry would crash the WS subscribe loop). That
+// leak is bounded (one per unique (path, kind) for device lifetime)
+// and lives upstream; see subject_registry::garbage_collect.
 template <class T, class Setter>
 sensesp::SKValueListener<T>* attach(const std::string& path,
                                     lv_subject_t* subject, Setter setter) {
   auto* listener = new sensesp::SKValueListener<T>(
       String(path.c_str()), kListenDelayMs);
-  listener->connect_to(new sensesp::LambdaConsumer<T>(
+  listener->connect_to(std::make_shared<sensesp::LambdaConsumer<T>>(
       [subject, setter](T v) { setter(subject, v); }));
   return listener;
 }
