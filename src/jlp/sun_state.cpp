@@ -17,14 +17,24 @@ namespace jlp {
 namespace {
 
 // "2026-06-13T18:34:12.000Z" → Unix seconds (UTC). Returns 0 on parse
-// fail or a non-Z (non-UTC) suffix; SK spec says these are UTC.
+// fail, a non-Z (non-UTC) suffix, or any mktime overflow / DST quirk;
+// SK spec says these are UTC.
 time_t parse_iso_utc(const char* s) {
   if (!s || !*s) return 0;
   struct tm t = {};
-  // strptime is fine on ESP-IDF; consumes through the seconds field.
-  // Anything after (fractional sec, "Z") is ignored — we don't need
-  // sub-second precision for sunrise / sunset.
-  if (!strptime(s, "%Y-%m-%dT%H:%M:%S", &t)) return 0;
+  // strptime returns a pointer to the first unconsumed char so we can
+  // verify the suffix. SK always sends 'Z' (optionally preceded by
+  // fractional seconds we don't care about) — reject anything that
+  // doesn't end with Z so we never silently interpret a local-time
+  // string as UTC.
+  const char* tail = strptime(s, "%Y-%m-%dT%H:%M:%S", &t);
+  if (!tail) return 0;
+  // Skip an optional fractional-seconds run (".123", ".000" etc.).
+  if (*tail == '.') {
+    ++tail;
+    while (*tail >= '0' && *tail <= '9') ++tail;
+  }
+  if (*tail != 'Z' || *(tail + 1) != '\0') return 0;
   // timegm() isn't part of POSIX; use the SYSV portable substitute:
   // set TZ=UTC0 around mktime() so the offset is zero.
   char* old_tz = getenv("TZ");
@@ -34,6 +44,10 @@ time_t parse_iso_utc(const char* s) {
   if (old_tz) setenv("TZ", old_tz, 1);
   else        unsetenv("TZ");
   tzset();
+  // mktime returns -1 on overflow / DST-ambiguity / invalid date;
+  // normalise to 0 so callers and has_data()'s `> 0` check don't
+  // need to special-case the sentinel.
+  if (out == (time_t)-1) return 0;
   return out;
 }
 
