@@ -1,5 +1,6 @@
 #include "http_api.h"
 
+#include <ArduinoJson.h>
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -81,28 +82,25 @@ esp_err_t layout_post(httpd_req_t* req) {
   vSemaphoreDelete(done);
 
   httpd_resp_set_type(req, "application/json");
+  // Build responses via ArduinoJson so user-controlled strings
+  // (layout name, error / warning messages) get escaped instead of
+  // being snprintf'd directly into the JSON — otherwise a layout
+  // named `my"layout` breaks the response shape.
+  JsonDocument resp;
   if (!result->ok) {
     httpd_resp_set_status(req, "400 Bad Request");
-    char buf[256];
-    snprintf(buf, sizeof(buf), "{\"ok\":false,\"err\":\"%s\"}",
-             result->err.c_str());
-    httpd_resp_sendstr(req, buf);
-    return ESP_OK;
-  }
-
-  char buf[384];
-  if (!result->warning.empty()) {
-    snprintf(buf, sizeof(buf),
-             "{\"ok\":true,\"name\":\"%s\",\"screens\":%u,\"widgets\":%u,"
-             "\"warning\":\"%s\"}",
-             result->name.c_str(), result->screens, result->widgets,
-             result->warning.c_str());
+    resp["ok"] = false;
+    resp["err"] = result->err;
   } else {
-    snprintf(buf, sizeof(buf),
-             "{\"ok\":true,\"name\":\"%s\",\"screens\":%u,\"widgets\":%u}",
-             result->name.c_str(), result->screens, result->widgets);
+    resp["ok"] = true;
+    resp["name"] = result->name;
+    resp["screens"] = result->screens;
+    resp["widgets"] = result->widgets;
+    if (!result->warning.empty()) resp["warning"] = result->warning;
   }
-  httpd_resp_sendstr(req, buf);
+  std::string out;
+  serializeJson(resp, out);
+  httpd_resp_sendstr(req, out.c_str());
   return ESP_OK;
 }
 
@@ -374,6 +372,21 @@ esp_err_t screenshot_get(httpd_req_t* req) {
   return ESP_OK;
 }
 
+// The widget catalog is constant per-firmware-build — kept as a raw
+// JSON literal so we don't allocate dozens of JsonObjects per /hello
+// call. ArduinoJson's `serialized()` splices it in verbatim.
+constexpr const char* kWidgetCatalogJson =
+    "{"
+      "\"label\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\",\"bg_color\",\"fg_color\"]},"
+      "\"value\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\",\"bg_color\",\"fg_color\"]},"
+      "\"toggle\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"bg_color\",\"fg_color\"]},"
+      "\"arc\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\",\"min\",\"max\",\"start_angle\",\"end_angle\",\"ticks\",\"tick_labels\",\"bands\",\"bg_color\",\"fg_color\"]},"
+      "\"bar\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\",\"min\",\"max\",\"vertical\",\"bg_color\",\"fg_color\"]},"
+      "\"bargroup\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bars\",\"bg_color\",\"fg_color\"]},"
+      "\"button\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"press_value\",\"release_value\",\"hold_ms\",\"bg_color\",\"fg_color\"]},"
+      "\"notifications\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"max_rows\",\"row_height\",\"columns\",\"row_color_field\",\"include_cleared\",\"bg_color\",\"fg_color\"]}"
+    "}";
+
 esp_err_t hello_get(httpd_req_t* req) {
   httpd_resp_set_type(req, "application/json");
   const std::string& name = layout_manager().active_name();
@@ -386,31 +399,27 @@ esp_err_t hello_get(httpd_req_t* req) {
     case ApplySource::PostLayout:   src_str = "post";        break;
     case ApplySource::Boot: default: src_str = "boot";       break;
   }
-  // Single buffer; widget catalog is small enough to inline.
-  char buf[1792];
-  snprintf(buf, sizeof(buf),
-      "{"
-        "\"schema\":1,"
-        "\"name\":\"%s\","
-        "\"hostname\":\"p4-cockpit\","
-        "\"firmware\":\"p4-cockpit-jlp-0.1.1\","
-        "\"display\":{\"w\":1024,\"h\":600,\"idle_timeout\":true,\"idle_dim_pct\":true},"
-        "\"widgets\":{"
-          "\"label\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\",\"bg_color\",\"fg_color\"]},"
-          "\"value\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\",\"bg_color\",\"fg_color\"]},"
-          "\"toggle\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"bg_color\",\"fg_color\"]},"
-          "\"arc\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\",\"min\",\"max\",\"start_angle\",\"end_angle\",\"ticks\",\"tick_labels\",\"bands\",\"bg_color\",\"fg_color\"]},"
-          "\"bar\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"display\",\"min\",\"max\",\"vertical\",\"bg_color\",\"fg_color\"]},"
-          "\"bargroup\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bars\",\"bg_color\",\"fg_color\"]},"
-          "\"button\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"press_value\",\"release_value\",\"hold_ms\",\"bg_color\",\"fg_color\"]},"
-          "\"notifications\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"max_rows\",\"row_height\",\"columns\",\"row_color_field\",\"include_cleared\",\"bg_color\",\"fg_color\"]}"
-        "},"
-        "\"screenshot\":{\"formats\":[\"jpeg\",\"bmp\"]},"
-        "\"active_layout_name\":\"%s\","
-        "\"layout_source\":\"%s\""
-      "}",
-      name.c_str(), name.c_str(), src_str);
-  httpd_resp_sendstr(req, buf);
+  // ArduinoJson handles escaping for user-controlled `name` (used as
+  // both the `name` field and `active_layout_name`); the static
+  // widget catalog goes in via serialized() so we don't pay the
+  // parse + reserialise cost on every call.
+  JsonDocument resp;
+  resp["schema"] = 1;
+  resp["name"] = name;
+  resp["hostname"] = "p4-cockpit";
+  resp["firmware"] = "p4-cockpit-jlp-0.1.1";
+  JsonObject display = resp["display"].to<JsonObject>();
+  display["w"] = 1024;
+  display["h"] = 600;
+  display["idle_timeout"] = true;
+  display["idle_dim_pct"] = true;
+  resp["widgets"] = serialized(kWidgetCatalogJson);
+  resp["screenshot"]["formats"] = serialized("[\"jpeg\",\"bmp\"]");
+  resp["active_layout_name"] = name;
+  resp["layout_source"] = src_str;
+  std::string out;
+  serializeJson(resp, out);
+  httpd_resp_sendstr(req, out.c_str());
   return ESP_OK;
 }
 
