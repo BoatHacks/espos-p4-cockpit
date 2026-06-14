@@ -6,9 +6,8 @@
 
 #include "esp_log.h"
 #include "sensesp.h"
-#include "sensesp/signalk/signalk_ws_client.h"
+#include "sensesp/signalk/signalk_value_listener.h"
 #include "sensesp/system/lambda_consumer.h"
-#include "sensesp_app.h"
 
 static const char* TAG = "jlp.sun";
 
@@ -110,57 +109,43 @@ DayNight SunState::classify() const {
 }
 
 void SunState::hook_sk_ws() {
-  auto app = sensesp::SensESPApp::get();
-  if (!app) {
-    ESP_LOGW(TAG, "no SensESPApp yet — hook_sk_ws must be called after builder");
-    return;
-  }
-  auto ws = app->get_ws_client();
-  if (!ws) {
-    ESP_LOGW(TAG, "no WS client — hook_sk_ws skipped");
-    return;
-  }
-  ws->on_value([](const String& path, const JsonVariantConst& value) {
-    // Two paths of interest, both ISO-8601 UTC strings.
-    const char* p = path.c_str();
-    if (!value.is<const char*>()) return;
-    const char* iso = value.as<const char*>();
-    // Copy the small string before crossing tasks; the value view
-    // points into the WS-task-owned parent doc.
-    std::string iso_owned(iso ? iso : "");
-    if (strcmp(p, "environment.sun.sunsetTime") == 0) {
-      sensesp::event_loop()->onDelay(0, [iso_owned]() {
-        sun_state().set_sunset_iso(iso_owned.c_str());
-      });
-    } else if (strcmp(p, "environment.sun.sunriseTime") == 0) {
-      sensesp::event_loop()->onDelay(0, [iso_owned]() {
-        sun_state().set_sunrise_iso(iso_owned.c_str());
-      });
-    }
-  });
-
-  // SensESP opens the WS with subscribe=none. Add an explicit
-  // subscribe for the two sun paths each time the WS (re)connects;
-  // policy:"instant" so we get the value immediately on connect, then
-  // again whenever the SK side recomputes (typically once a day, or
-  // when position changes).
-  ws->connect_to(new sensesp::LambdaConsumer<sensesp::SKWSConnectionState>(
-      [](sensesp::SKWSConnectionState state) {
-        if (state != sensesp::SKWSConnectionState::kSKWSConnected) return;
-        auto a = sensesp::SensESPApp::get();
-        if (!a) return;
-        auto w = a->get_ws_client();
-        if (!w) return;
-        String sub =
-            R"({"context":"vessels.self","subscribe":[)"
-            R"({"path":"environment.sun.sunsetTime","format":"delta","policy":"instant"},)"
-            R"({"path":"environment.sun.sunriseTime","format":"delta","policy":"instant"})"
-            R"(]})";
-        w->sendTXT(sub);
-        ESP_LOGI(TAG, "sent environment.sun.* subscribe frame");
+  // Use per-path SKValueListener instead of the global on_value hook:
+  //
+  // - on_value is a single-slot setter — calling it after
+  //   notifications_registry already set its own callback would
+  //   replace that callback and break wake-on-escalation. SKListener
+  //   composes cleanly with everything else.
+  // - on_value fires for every WS delta (hundreds per second on a
+  //   busy boat). The previous implementation walked every delta to
+  //   strcmp the path and allocated a std::string for each
+  //   string-valued one, which kept the WS task busy enough to
+  //   starve event_loop and time out POST /layout. Per-path
+  //   listeners do the filtering upstream in SensESP.
+  // - SensESP includes the listener's path in its next subscribe
+  //   frame automatically, so we don't need a separate connect-state
+  //   hook to send a manual subscribe envelope.
+  constexpr int kListenDelayMs = 1000;
+  auto* sunset = new sensesp::SKValueListener<String>(
+      "environment.sun.sunsetTime", kListenDelayMs);
+  sunset->connect_to(std::make_shared<sensesp::LambdaConsumer<String>>(
+      [](String iso) {
+        // Listener fires on the SensESP main task; SunState::set_*
+        // is plain data assignment with no LVGL calls, safe to run
+        // here directly. Copy the String to std::string first so the
+        // capture doesn't outlive the listener's transient.
+        std::string s(iso.c_str());
+        sun_state().set_sunset_iso(s.c_str());
       }));
 
-  ESP_LOGI(TAG, "subscribed to SK WS value callback (environment.sun.*)");
+  auto* sunrise = new sensesp::SKValueListener<String>(
+      "environment.sun.sunriseTime", kListenDelayMs);
+  sunrise->connect_to(std::make_shared<sensesp::LambdaConsumer<String>>(
+      [](String iso) {
+        std::string s(iso.c_str());
+        sun_state().set_sunrise_iso(s.c_str());
+      }));
+
+  ESP_LOGI(TAG, "subscribed to environment.sun.sunsetTime + sunriseTime");
 }
 
 SunState& sun_state() {
