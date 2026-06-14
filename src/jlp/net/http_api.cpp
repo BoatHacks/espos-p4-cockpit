@@ -10,6 +10,7 @@
 #include "esp_timer.h"
 #include "lvgl.h"
 #include "sensesp.h"
+#include <atomic>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -285,7 +286,32 @@ static bool encode_rgb565_to_jpeg(const ScreenshotResult& src,
   return true;
 }
 
+// Single-flight guard. Each screenshot takes an lv_snapshot (1.2 MB
+// PSRAM alloc) + JPEG encode on the event_loop task — hundreds of ms
+// each. The designer's live-mirror mode polls /screenshot in a tight
+// loop; if several requests arrive faster than event_loop can serve
+// them they stack up as deferred tasks and starve everything else on
+// event_loop (layout apply, the n2k heartbeat, the notifications
+// drain). A push during that window times out -> "device proxy 504".
+//
+// Serve at most one screenshot at a time. A second concurrent request
+// gets 429 immediately instead of queuing more event_loop work; the
+// mirror loop just retries on its next iteration.
+static std::atomic<bool> g_screenshot_busy{false};
+
 esp_err_t screenshot_get(httpd_req_t* req) {
+  bool expected = false;
+  if (!g_screenshot_busy.compare_exchange_strong(expected, true)) {
+    httpd_resp_set_status(req, "429 Too Many Requests");
+    httpd_resp_set_hdr(req, "Retry-After", "1");
+    httpd_resp_sendstr(req, "{\"ok\":false,\"err\":\"screenshot in flight\"}");
+    return ESP_OK;
+  }
+  // RAII-style release: any return path below clears the flag.
+  struct BusyGuard {
+    ~BusyGuard() { g_screenshot_busy.store(false); }
+  } busy_guard;
+
   // Pick format from `?fmt=`. Default jpeg — that's what the designer's
   // live mirror polls. Anything not "bmp" falls through to jpeg.
   bool want_bmp = false;
