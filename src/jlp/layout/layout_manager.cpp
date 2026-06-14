@@ -1,7 +1,9 @@
 #include "layout_manager.h"
 
 #include <ArduinoJson.h>
+#include <optional>
 #include <set>
+#include <unordered_map>
 #include <unordered_set>
 #include "esp_log.h"
 
@@ -169,9 +171,59 @@ bool build_screens(lv_obj_t* root, JsonObjectConst doc, JsonArrayConst screens,
   return true;
 }
 
-// Validate global structure before building (kind-conflict detection
-// happens in get_or_create during build; here we catch duplicates and
-// missing required fields cheaply).
+// Subject kind a given widget type expects on its `bind` path. Must
+// stay in lockstep with the get_or_create() calls in widget_factory.cpp.
+// Returns nullopt for widgets that don't bind a path at all (button,
+// notifications) — those skip the kind-conflict check.
+std::optional<SubjectKind> expected_subject_kind(const char* type) {
+  if (!type) return std::nullopt;
+  if (!strcmp(type, "label"))    return SubjectKind::Float;
+  if (!strcmp(type, "value"))    return SubjectKind::Float;
+  if (!strcmp(type, "arc"))      return SubjectKind::Float;
+  if (!strcmp(type, "bar"))      return SubjectKind::Float;
+  if (!strcmp(type, "toggle"))   return SubjectKind::Int;
+  // bargroup: handled separately because each sub-bar is its own
+  // (path, kind) pair. button + notifications: no bind. Anything
+  // unknown returns nullopt and is left to validate's existing
+  // dispatch error path.
+  return std::nullopt;
+}
+
+const char* subject_kind_name(SubjectKind k) {
+  switch (k) {
+    case SubjectKind::Float:  return "Float";
+    case SubjectKind::Int:    return "Int";
+    case SubjectKind::Bool:   return "Bool";
+    case SubjectKind::String: return "String";
+  }
+  return "?";
+}
+
+// Record a (path, kind) requirement into `seen`. Returns false +
+// fills *err on conflict (path already requested with a different
+// kind).
+bool record_path_kind(const std::string& path, SubjectKind kind,
+                      std::unordered_map<std::string, SubjectKind>* seen,
+                      const std::string& widget_label, std::string* err) {
+  auto it = seen->find(path);
+  if (it == seen->end()) {
+    (*seen)[path] = kind;
+    return true;
+  }
+  if (it->second != kind) {
+    *err = std::string("kind conflict on bind path '") + path +
+           "': " + widget_label + " wants " + subject_kind_name(kind) +
+           " but a previous widget already bound it as " +
+           subject_kind_name(it->second);
+    return false;
+  }
+  return true;
+}
+
+// Validate global structure before building. Catches duplicates,
+// missing required fields, AND kind conflicts on shared bind paths
+// (e.g. one widget wants a path as Float, another as Int) so the
+// layout is rejected up-front rather than half-built in LVGL.
 bool validate(JsonObjectConst doc, std::string* err) {
   int schema = doc["schema"] | 0;
   if (schema != kSchemaVersion) {
@@ -188,6 +240,10 @@ bool validate(JsonObjectConst doc, std::string* err) {
   }
 
   std::unordered_set<std::string> ids;
+  // path -> kind that's already been requested across the whole
+  // layout. Survives screens, since widgets on different screens can
+  // still bind the same path.
+  std::unordered_map<std::string, SubjectKind> seen_paths;
   for (JsonObjectConst s : screens) {
     const char* sid = s["id"] | (const char*)nullptr;
     if (!sid) { *err = "screen missing id"; return false; }
@@ -204,8 +260,33 @@ bool validate(JsonObjectConst doc, std::string* err) {
         *err = std::string("duplicate widget id in screen ") + sid + ": " + wid;
         return false;
       }
-      if (!(w["type"] | (const char*)nullptr)) {
+      const char* type = w["type"] | (const char*)nullptr;
+      if (!type) {
         *err = std::string("widget missing type in screen ") + sid;
+        return false;
+      }
+
+      // Kind-conflict check. bargroup is a bag of independent sub-
+      // bars; everything else has at most one bind path.
+      const std::string label = std::string(type) + " '" + wid + "'";
+      if (!strcmp(type, "bargroup")) {
+        JsonArrayConst bars = w["bars"];
+        for (JsonObjectConst b : bars) {
+          const char* bp = b["bind"] | (const char*)nullptr;
+          if (!bp) continue;  // sub-bar with no bind is a render-only stub
+          if (!record_path_kind(bp, SubjectKind::Float, &seen_paths,
+                                label, err)) {
+            return false;
+          }
+        }
+        continue;
+      }
+      const char* bind = w["bind"] | (const char*)nullptr;
+      if (!bind) continue;  // toggle requires bind, others don't —
+                            // missing-required-bind is build_*'s job
+      auto kind = expected_subject_kind(type);
+      if (!kind) continue;  // unknown / no-bind kinds: leave to dispatch
+      if (!record_path_kind(bind, *kind, &seen_paths, label, err)) {
         return false;
       }
     }
