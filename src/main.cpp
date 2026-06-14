@@ -38,6 +38,7 @@
 #include "jlp/subject_registry.h"
 #include "jlp/alert_overlay.h"
 #include "jlp/notifications_registry.h"
+#include "jlp/sun_state.h"
 #include "jlp/wake_overlay.h"
 #include "jlp/zone_registry.h"
 
@@ -87,6 +88,13 @@ void setup() {
                  ->set_sk_server("192.168.0.148", 4100)
                  ->get_app();
 
+  // Start SNTP so `time(nullptr)` returns valid Unix seconds once
+  // WiFi is up. UTC only — the day/night classifier in sun_state
+  // works purely in UTC against SK's sunsetTime / sunriseTime, no
+  // local TZ needed. SNTP client retries internally; firing it
+  // before WiFi is fine.
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+
   // After every layout swap, restart the SK WS only when the new
   // layout introduced bound paths SensESP isn't already subscribed
   // to. (SensESP subscribes once at on_connected; listeners added
@@ -128,6 +136,7 @@ void setup() {
   jlp::mdns_announce_start(8081);
   jlp::zones().hook_sk_ws();
   jlp::notifications().hook_sk_ws();
+  jlp::sun_state().hook_sk_ws();
   jlp::alert_overlay().init();
   // wake overlay must be initialised AFTER alert_overlay so that
   // alert_overlay's move_foreground (when it pops a notification)
