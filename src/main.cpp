@@ -227,6 +227,42 @@ void setup() {
 
   event_loop()->onRepeat(33, []() { lvgl_tick(); });
 
+  // event_loop liveness watchdog.
+  //
+  // The health-check watchdog above runs ON event_loop, so if
+  // event_loop ever deadlocks (a lock held and never released, an
+  // infinite loop in a callback) it can't fire — the panel hangs and
+  // needs a manual power-cycle. This second watchdog runs on its own
+  // FreeRTOS task: event_loop bumps a monotonic heartbeat every tick;
+  // the task samples it once a second and force-reboots if it hasn't
+  // advanced for 15 s. 15 s is comfortably longer than the worst
+  // legitimate event_loop stall we expect (a ~5 s screenshot burst,
+  // a layout apply draining the WS reconnect storm) but short enough
+  // that a real hang self-recovers instead of stranding the helm.
+  static volatile uint32_t s_event_loop_heartbeat = 0;
+  event_loop()->onRepeat(250, []() { s_event_loop_heartbeat++; });
+  xTaskCreate(
+      [](void*) {
+        uint32_t last = 0;
+        int stalled_s = 0;
+        for (;;) {
+          vTaskDelay(pdMS_TO_TICKS(1000));
+          uint32_t now = s_event_loop_heartbeat;
+          if (now == last) {
+            if (++stalled_s >= 15) {
+              ESP_LOGE("el_wdt",
+                       "event_loop stalled %ds (hb=%lu); rebooting",
+                       stalled_s, (unsigned long)now);
+              esp_restart();
+            }
+          } else {
+            stalled_s = 0;
+            last = now;
+          }
+        }
+      },
+      "el_wdt", 2560, nullptr, configMAX_PRIORITIES - 1, nullptr);
+
   // 1s status tick: WiFi / N2K / uptime / heap into the overlay.
   event_loop()->onRepeat(1000, [receiver, n2k_server]() {
     if (WiFi.status() == WL_CONNECTED) {
