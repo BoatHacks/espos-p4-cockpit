@@ -5,6 +5,7 @@
 
 #include "sensesp_base_app.h"
 #include "sensesp_cockpit_display/lvgl/lv_drivers.h"
+#include "sun_state.h"
 #include "wake_overlay.h"
 
 static const char* TAG = "jlp.dimmer";
@@ -38,6 +39,14 @@ void IdleDimmer::init() {
   // — finer resolution is wasteful for human-scale timeouts.
   sensesp::event_loop()->onRepeat(1000, [this]() {
     if (idle_timeout_sec_ == 0) {
+      if (!on_) set_on(true);
+      return;
+    }
+    // Day/night gating: only let the panel dim during night. Day
+    // (or Unknown, e.g. SK hasn't published sunrise/sunset yet)
+    // is fail-safe-bright. Sun classification is refreshed cheap
+    // on every tick — classify() is two integer comparisons.
+    if (sun_state().classify() != DayNight::Night) {
       if (!on_) set_on(true);
       return;
     }
