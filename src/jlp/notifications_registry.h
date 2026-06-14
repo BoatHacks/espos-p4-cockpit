@@ -8,6 +8,8 @@
 #include <vector>
 
 #include <ArduinoJson.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 namespace jlp {
 
@@ -139,6 +141,19 @@ class NotificationsRegistry {
  private:
   void fire_observers();
 
+  // WS-task → event_loop hand-off. The WS callback appends deltas to
+  // `pending_` under `pending_mutex_` (a few µs of lock). A 50 ms
+  // event_loop timer (installed in hook_sk_ws) drains the whole
+  // batch into apply() at once. This keeps event_loop's deferred-
+  // task queue from saturating during the SK-reconnect storm where
+  // dozens of notifications.* deltas land in a single ms — the
+  // previous per-delta onDelay(0) pattern was wedging POST /layout.
+  struct Pending {
+    std::string suffix;
+    JsonDocument doc;
+  };
+  void drain_pending();
+
   struct Slot {
     ObserverToken token;
     Observer cb;
@@ -155,6 +170,10 @@ class NotificationsRegistry {
   // last_change_was_escalation(). Reset to false at the top of every
   // apply() invocation.
   bool last_change_was_escalation_ = false;
+
+  std::vector<Pending> pending_;
+  StaticSemaphore_t pending_mutex_buffer_{};
+  SemaphoreHandle_t pending_mutex_ = nullptr;
 };
 
 NotificationsRegistry& notifications();

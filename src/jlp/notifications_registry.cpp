@@ -148,6 +148,24 @@ void NotificationsRegistry::fire_observers() {
   for (const auto& s : snapshot) s.cb();
 }
 
+void NotificationsRegistry::drain_pending() {
+  // Take the buffer under the lock as quickly as possible, then run
+  // apply() on each item outside the lock so the WS callback can
+  // keep appending. apply() fires observers, which on the event_loop
+  // task is allowed to be slow (it runs LVGL through the alert
+  // overlay etc.) — must not block the WS task on it.
+  std::vector<Pending> batch;
+  if (xSemaphoreTake(pending_mutex_, 0) == pdTRUE) {
+    batch.swap(pending_);
+    xSemaphoreGive(pending_mutex_);
+  } else {
+    return;  // WS is appending; pick up next tick
+  }
+  for (auto& p : batch) {
+    apply(p.suffix, p.doc.as<JsonVariantConst>());
+  }
+}
+
 void NotificationsRegistry::hook_sk_ws() {
   auto app = sensesp::SensESPApp::get();
   if (!app) {
@@ -159,23 +177,40 @@ void NotificationsRegistry::hook_sk_ws() {
     ESP_LOGW(TAG, "no WS client — hook_sk_ws skipped");
     return;
   }
+
+  // Static mutex so we don't need a destructor / leak a heap one.
+  pending_mutex_ = xSemaphoreCreateMutexStatic(&pending_mutex_buffer_);
+
+  // WS task: append to the pending buffer. NO per-delta event_loop
+  // onDelay — that was wedging event_loop's queue when SK delivered
+  // 50+ notifications.* values inside a single ms (typical post-
+  // reconnect storm). Single mutex take per delta; cheap.
   ws->on_value([](const String& path, const JsonVariantConst& value) {
-    // Filter: we only care about notifications.* paths. Strip the
-    // prefix so registry keys are compact.
     const char* p = path.c_str();
     constexpr const char* kPrefix = "notifications.";
-    constexpr size_t kPrefixLen = 14;  // strlen("notifications.")
+    constexpr size_t kPrefixLen = 14;
     if (strncmp(p, kPrefix, kPrefixLen) != 0) return;
-    std::string suffix(p + kPrefixLen);
+    Pending entry;
+    entry.suffix.assign(p + kPrefixLen);
+    entry.doc.set(value);
+    auto& reg = notifications();
+    if (!reg.pending_mutex_) return;  // hook_sk_ws not finished yet
+    if (xSemaphoreTake(reg.pending_mutex_, pdMS_TO_TICKS(10)) == pdTRUE) {
+      reg.pending_.push_back(std::move(entry));
+      xSemaphoreGive(reg.pending_mutex_);
+    }
+    // On lock contention we drop the delta. The 10 ms timeout is
+    // generous compared to the drain critical section (microseconds);
+    // a miss here means the consumer was wedged for >10 ms which is
+    // a separate problem worth surfacing as a missed notification.
+  });
 
-    // Snapshot the value before the WS task moves on. JsonVariantConst
-    // is a view into the parent doc; copy into a local JsonDocument so
-    // the event_loop callback has a stable reference.
-    JsonDocument doc;
-    doc.set(value);
-    sensesp::event_loop()->onDelay(0, [suffix, doc = std::move(doc)]() {
-      notifications().apply(suffix, doc.as<JsonVariantConst>());
-    });
+  // event_loop drains the buffer at 50 ms cadence. Bounded queue
+  // pressure regardless of WS rate; up to 50 ms of latency before
+  // an alarm reaches the overlay, which is well below human
+  // perception for a helm display.
+  sensesp::event_loop()->onRepeat(50, []() {
+    notifications().drain_pending();
   });
 
   // SensESP opens the WS with `subscribe=none`; the per-listener
@@ -188,16 +223,13 @@ void NotificationsRegistry::hook_sk_ws() {
   // Wait until the WS is connected; SensESP fires the connection
   // state into its ValueProducer, so subscribe via the event loop
   // each time we (re)connect.
-  ws->connect_to(new sensesp::LambdaConsumer<sensesp::SKWSConnectionState>(
+  ws->connect_to(std::make_shared<sensesp::LambdaConsumer<sensesp::SKWSConnectionState>>(
       [](sensesp::SKWSConnectionState state) {
         if (state != sensesp::SKWSConnectionState::kSKWSConnected) return;
         auto a = sensesp::SensESPApp::get();
         if (!a) return;
         auto w = a->get_ws_client();
         if (!w) return;
-        // SK delta-spec subscription envelope. policy:"instant"
-        // delivers each delta as it lands, no debouncing — alarms
-        // shouldn't be coalesced.
         String sub =
             R"({"context":"vessels.self","subscribe":[)"
             R"({"path":"notifications.*","format":"delta","policy":"instant"})"
@@ -206,7 +238,7 @@ void NotificationsRegistry::hook_sk_ws() {
         ESP_LOGI(TAG, "sent notifications.* subscribe frame");
       }));
 
-  ESP_LOGI(TAG, "subscribed to SK WS value callback (notifications.*)");
+  ESP_LOGI(TAG, "subscribed to SK WS value callback (notifications.*, batched)");
 }
 
 NotificationsRegistry& notifications() {
