@@ -407,7 +407,7 @@ esp_err_t hello_get(httpd_req_t* req) {
   resp["schema"] = 1;
   resp["name"] = name;
   resp["hostname"] = "p4-cockpit";
-  resp["firmware"] = "p4-cockpit-jlp-0.1.1";
+  resp["firmware"] = "p4-cockpit-jlp-0.1.2";
   JsonObject display = resp["display"].to<JsonObject>();
   display["w"] = 1024;
   display["h"] = 600;
