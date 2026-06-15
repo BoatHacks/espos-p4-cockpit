@@ -19,7 +19,7 @@ void mdns_announce_start(uint16_t api_port) {
           // discovery before falling back to a real /hello fetch.
           {"schema",   "1"},
           {"widgets",  "label,value,toggle,arc,bar,bargroup,button,notifications"},
-          {"firmware", "p4-cockpit-jlp-0.1.2"},
+          {"firmware", "p4-cockpit-jlp-0.1.3"},
           {"api",      "/layout,/hello,/healthz,/screenshot"},
       };
       esp_err_t err = mdns_service_add(
