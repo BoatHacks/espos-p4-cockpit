@@ -236,6 +236,17 @@ lv_obj_t* build_label(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
         // Zones are in raw SK units (e.g. ratio 0..1 for SOC); match
         // against raw. Fall back to the spec'd bg_color when no zone
         // matches — zone always wins to keep alarms visible.
+        //
+        // tile is a SIBLING object (the root), not the observer's own
+        // target. LVGL deletes a parent's children in list order, so
+        // during a layout swap the tile can be freed before this
+        // observer's target label — and lv_subject_add_observer_obj
+        // delivers a synchronous notify on registration. A value
+        // delta in flight during the swap then fires this callback
+        // against a freed tile → Load access fault in get_local_style.
+        // Guard the sibling deref; the observer auto-unsubscribes on
+        // its own target's delete, so `w` above is always valid here.
+        if (!lv_obj_is_valid(lc->tile)) return;
         uint32_t bg = zone_color(lc->d.path, raw, lc->colors.bg);
         lv_obj_set_style_bg_color(lc->tile, lv_color_hex(bg), LV_PART_MAIN);
       },
@@ -343,8 +354,18 @@ lv_obj_t* build_value(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
         // in its own bottom-right label so it doesn't grow / shrink
         // the centered text when the value width changes).
         lv_label_set_text_fmt(w, "%.*f", vc->d.decimals, v);
-        // Unit label: kept separate; set once is enough but cheap.
-        lv_label_set_text(vc->unit_lbl, vc->d.unit);
+        // unit_lbl and tile are SIBLING objects, not the observer's
+        // own target. During a layout swap LVGL can free them before
+        // this observer's target label, and the synchronous notify
+        // from lv_subject_add_observer_obj (or a value delta arriving
+        // mid-swap) then derefs freed memory → Load access fault in
+        // get_local_style. Guard each sibling; `w` is always valid
+        // (the observer auto-unsubscribes on its target's delete).
+        if (lv_obj_is_valid(vc->unit_lbl)) {
+          // Unit label: kept separate; set once is enough but cheap.
+          lv_label_set_text(vc->unit_lbl, vc->d.unit);
+        }
+        if (!lv_obj_is_valid(vc->tile)) return;
         // Zone tint paints the whole tile bg. Raw value matched
         // against raw-unit zones (firmware convention). Falls back
         // to spec'd bg_color when no zone matches.
