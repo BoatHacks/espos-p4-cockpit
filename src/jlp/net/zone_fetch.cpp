@@ -200,7 +200,11 @@ void fetch_task(void* arg) {
           break;
         case SubjectKind::Int:
         case SubjectKind::Bool:
-          if (!vr.is_float) lv_subject_set_int(sub, vr.i);
+          // Coerce a float reading (SK may report an int path's value
+          // as 5.0) so the seed isn't silently dropped — mirrors the
+          // int→float coercion the Float case does.
+          if (vr.is_float) lv_subject_set_int(sub, (int)vr.f);
+          else lv_subject_set_int(sub, vr.i);
           break;
         case SubjectKind::String:
           break;  // seeded from description() at build time
