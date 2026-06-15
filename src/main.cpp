@@ -88,13 +88,6 @@ void setup() {
                  ->set_sk_server("192.168.0.148", 4100)
                  ->get_app();
 
-  // Start SNTP so `time(nullptr)` returns valid Unix seconds once
-  // WiFi is up. UTC only — the day/night classifier in sun_state
-  // works purely in UTC against SK's sunsetTime / sunriseTime, no
-  // local TZ needed. SNTP client retries internally; firing it
-  // before WiFi is fine.
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-
   // After every layout swap, restart the SK WS only when the new
   // layout introduced bound paths SensESP isn't already subscribed
   // to. (SensESP subscribes once at on_connected; listeners added
