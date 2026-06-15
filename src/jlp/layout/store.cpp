@@ -15,13 +15,14 @@ namespace {
 constexpr const char* kBase = "/lfs";
 constexpr const char* kPath = "/lfs/layout.json";
 constexpr const char* kTmpPath = "/lfs/layout.json.tmp";
+constexpr const char* kProbePath = "/lfs/.probe";
 constexpr const char* kPartitionLabel = "spiffs";
 
 bool g_mounted = false;
-}  // namespace
 
-bool store_init() {
-  if (g_mounted) return true;
+// Mount the partition (formatting on mount failure). Returns true on a
+// successful mount. Does NOT validate writability — see probe_writable.
+bool mount() {
   esp_vfs_littlefs_conf_t conf{};
   conf.base_path = kBase;
   conf.partition_label = kPartitionLabel;
@@ -37,7 +38,60 @@ bool store_init() {
     ESP_LOGI(TAG, "littlefs mounted at %s (%u/%u bytes used)", kBase,
              (unsigned)used, (unsigned)total);
   }
-  g_mounted = true;
+  return true;
+}
+
+// Exercise the EXACT write path (tmp file + rename) the real layout
+// write uses, so the boot probe trips on the same corruption the
+// first push otherwise would. A probe that touches a different path
+// or does a smaller write can pass while the real write still fails.
+// Returns true iff a full write+rename round-trips cleanly.
+bool probe_write_path() {
+  // ~512 bytes — large enough to allocate a fresh block like a real
+  // layout, which is where the first-write-after-mount corruption
+  // surfaces. (A 3-byte canary stayed inside the metadata block and
+  // didn't reproduce it.)
+  std::string filler(512, 'x');
+  FILE* f = fopen(kTmpPath, "wb");
+  if (!f) return false;
+  bool ok = fwrite(filler.data(), 1, filler.size(), f) == filler.size();
+  if (fclose(f) != 0) ok = false;
+  if (ok && rename(kTmpPath, kProbePath) != 0) ok = false;
+  remove(kTmpPath);
+  remove(kProbePath);
+  return ok;
+}
+}  // namespace
+
+bool store_init() {
+  if (g_mounted) return true;
+  if (!mount()) return false;
+
+  // LittleFS's lazy format-on-mount (format_if_mount_failed) lays down
+  // a minimal superblock that, on this flash, fails the FIRST real
+  // write-of-a-new-block with "Corrupted dir pair at {0x1,0x0}". The
+  // existing reformat-on-write-failure path heals it, but only AFTER
+  // the user's first push pays the reformat. To make that first push
+  // clean, do a full write-path probe here at boot and, if it fails,
+  // explicitly format + re-probe until the FS round-trips a real
+  // write. Up to two attempts — one format almost always settles it.
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    if (probe_write_path()) {
+      if (attempt > 0) ESP_LOGI(TAG, "littlefs writable after reformat");
+      g_mounted = true;
+      return true;
+    }
+    ESP_LOGW(TAG, "littlefs not writable at boot; reformatting (try %d)",
+             attempt + 1);
+    esp_vfs_littlefs_unregister(kPartitionLabel);
+    if (esp_littlefs_format(kPartitionLabel) != ESP_OK) {
+      ESP_LOGE(TAG, "boot reformat failed");
+    }
+    if (!mount()) return false;
+  }
+  ESP_LOGE(TAG, "littlefs still not writable after 2 reformats; "
+                "writes will reformat-retry per push");
+  g_mounted = true;  // mounted for reads; writes self-heal via retry
   return true;
 }
 
