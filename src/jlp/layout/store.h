@@ -4,12 +4,19 @@
 
 namespace jlp {
 
-// On-device persistence for the active layout. v1: a single file on a
-// littlefs partition (labelled "spiffs" — the pio-default name for the
-// data partition; we use it via the joltwallet littlefs driver).
+// On-device persistence for the active layout. Stored as a single NVS
+// blob in a dedicated "layout" NVS partition (see p4_16mb.csv). NVS
+// replaced LittleFS here because LittleFS on this flash did not survive
+// a power-cycle — the partition came back unmountable and was silently
+// reformatted, dropping the persisted layout.
 
 // Mount the partition. Idempotent. Returns false on failure.
 bool store_init();
+
+// One-line summary of what store_init() observed at boot (mount
+// used-bytes, whether a layout was preserved/restored, reformats).
+// Surfaced via /hello for diagnostics when serial isn't available.
+const char* store_boot_report();
 
 // Returns true and fills `out` if a layout file exists. False if
 // missing, or on read error.
