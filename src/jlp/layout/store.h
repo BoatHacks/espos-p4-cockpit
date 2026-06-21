@@ -18,19 +18,22 @@ bool store_init();
 // Surfaced via /hello for diagnostics when serial isn't available.
 const char* store_boot_report();
 
-// Returns true and fills `out` if a layout file exists. False if
-// missing, or on read error.
+// Returns true and fills `out` if a layout blob is stored. False if
+// absent, or on read error.
 bool store_read(std::string* out);
 
-// Atomic write: write to a tmp path then rename. Returns false on any
-// IO error. Caller must only call this after a successful layout swap.
+// Persist the layout. Atomic and power-fail-safe via NVS: nvs_set_blob
+// stages the value and nvs_commit makes it visible in one step, so a
+// power loss mid-write leaves the prior value intact (no tmp/rename
+// needed). Returns false on any NVS error. Caller must only call this
+// after a successful layout swap. (Name kept for the unchanged caller.)
 bool store_write_atomic(const std::string& json);
 
 // Remove the persisted layout. Called by main.cpp on boot when the
 // stored layout fails to apply, so subsequent boots skip straight to
 // the compiled default instead of re-trying the same bad blob.
-// Returns true if the file was removed or wasn't there to begin with;
-// false only on a real IO error.
+// Returns true if the blob was erased or wasn't there to begin with;
+// false only on a real NVS error.
 bool store_clear();
 
 }  // namespace jlp
