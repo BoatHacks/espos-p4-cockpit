@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "../layout/layout_manager.h"
+#include "../layout/store.h"
 
 static const char* TAG = "jlp.http";
 
@@ -434,6 +435,7 @@ esp_err_t hello_get(httpd_req_t* req) {
   resp["name"] = name;
   resp["hostname"] = "p4-cockpit";
   resp["firmware"] = "p4-cockpit-jlp-0.1.4";
+  resp["store"] = jlp::store_boot_report();  // persistence backend status
   JsonObject display = resp["display"].to<JsonObject>();
   display["w"] = 1024;
   display["h"] = 600;
