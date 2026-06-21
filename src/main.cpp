@@ -45,6 +45,13 @@
 using namespace sensesp;
 using namespace sensesp_cockpit_display;
 
+// SK server the firmware talks to: WS subscription, applicationData
+// fetch, and per-path zone/value REST seeding all target this host.
+// Surfaced on the connection-lost banner so the helm shows which
+// server is unreachable.
+static constexpr const char* kSkHost = "192.168.0.148";
+static constexpr uint16_t kSkPort = 4100;
+
 void setup() {
   SetupLogging(ESP_LOG_INFO);
 
@@ -85,8 +92,13 @@ void setup() {
   auto app = builder.set_hostname("p4-cockpit")
                  ->set_wifi_client("MOIN", "Moin2018!")
                  ->set_wifi_access_point("", "")
-                 ->set_sk_server("192.168.0.148", 4100)
+                 ->set_sk_server(kSkHost, kSkPort)
                  ->get_app();
+
+  // Tell the overlay which server the connection-lost banner should
+  // name. (ws_client->get_server_address() is empty until the first
+  // connect, so use the configured literals.)
+  jlp::overlay().set_sk_server(kSkHost, kSkPort);
 
   // After every layout swap, restart the SK WS only when the new
   // layout introduced bound paths SensESP isn't already subscribed
@@ -110,7 +122,7 @@ void setup() {
         // ~25 ms per path on a healthy LAN; the fetch task drives
         // them serially so the burst stays small.
         std::vector<std::string> v(new_paths.begin(), new_paths.end());
-        jlp::zone_fetch_for_paths("192.168.0.148", 4100, v);
+        jlp::zone_fetch_for_paths(kSkHost, kSkPort, v);
         // ws->restart() is intentionally NOT called here anymore.
         // The reconnect floods event_loop with SK's initial-state
         // burst for 30+ seconds, wedging the next push or
@@ -146,15 +158,19 @@ void setup() {
       jlp::idle_dimmer().wake();
     }
   });
-  jlp::layout_fetch_async_apply("192.168.0.148", 4100);
+  jlp::layout_fetch_async_apply(kSkHost, kSkPort);
 
   // --- SK WS state into the overlay ---
   auto ws_client = app->get_ws_client();
   ws_client->connect_to(new LambdaConsumer<SKWSConnectionState>(
       [](SKWSConnectionState state) {
+        // This consumer runs on the event_loop task (connection_state_
+        // is a TaskQueueProducer drained there), so lv_* calls here
+        // need no marshaling.
         switch (state) {
           case SKWSConnectionState::kSKWSConnected:
             jlp::overlay().set_sk("ok");
+            jlp::overlay().hide_sk_lost();
             break;
           case SKWSConnectionState::kSKWSConnecting:
             jlp::overlay().set_sk("connecting");
@@ -165,6 +181,7 @@ void setup() {
           case SKWSConnectionState::kSKWSDisconnected:
           default:
             jlp::overlay().set_sk("down");
+            jlp::overlay().show_sk_lost();
             break;
         }
       }));

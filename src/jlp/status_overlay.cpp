@@ -52,6 +52,30 @@ void StatusOverlay::init() {
   lv_obj_set_style_radius(content_root_, 0, LV_PART_MAIN);
   lv_obj_set_style_pad_all(content_root_, 0, LV_PART_MAIN);
   lv_obj_clear_flag(content_root_, LV_OBJ_FLAG_SCROLLABLE);
+
+  // Connection-lost banner: a full-width red bar pinned to the bottom,
+  // parented to the SCREEN (not the strip) so it shows even when a
+  // layout sets status_overlay:false and hides the strip. Hidden until
+  // the SK WS reports Disconnected. Created last so it paints above the
+  // content; alert_overlay / wake_overlay move_foreground after us, so
+  // a full-screen alarm still covers it.
+  sk_lost_ = lv_obj_create(scr);
+  lv_obj_set_size(sk_lost_, LV_HOR_RES, 40);
+  lv_obj_align(sk_lost_, LV_ALIGN_BOTTOM_MID, 0, 0);
+  lv_obj_set_style_bg_color(sk_lost_, lv_color_hex(0xf85149), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(sk_lost_, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_border_width(sk_lost_, 0, LV_PART_MAIN);
+  lv_obj_set_style_radius(sk_lost_, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(sk_lost_, 4, LV_PART_MAIN);
+  lv_obj_clear_flag(sk_lost_, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(sk_lost_, LV_OBJ_FLAG_HIDDEN);
+  sk_lost_lbl_ = lv_label_create(sk_lost_);
+  lv_obj_set_style_text_color(sk_lost_lbl_, lv_color_hex(0xffffff),
+                              LV_PART_MAIN);
+  lv_obj_set_style_text_font(sk_lost_lbl_, &lv_font_montserrat_14,
+                             LV_PART_MAIN);
+  lv_label_set_text(sk_lost_lbl_, "Signal K connection lost");
+  lv_obj_center(sk_lost_lbl_);
 }
 
 void StatusOverlay::set_hostname(const char* hostname) {
@@ -67,6 +91,29 @@ void StatusOverlay::set_wifi(const char* line) {
 void StatusOverlay::set_sk(const char* line) {
   if (!lbl_sk_) return;
   lv_label_set_text_fmt(lbl_sk_, "sk:%s", line ? line : "?");
+}
+
+void StatusOverlay::set_sk_server(const char* host, uint16_t port) {
+  snprintf(sk_server_, sizeof(sk_server_), "%s:%u", host ? host : "?",
+           (unsigned)port);
+}
+
+void StatusOverlay::show_sk_lost() {
+  if (!sk_lost_ || !sk_lost_lbl_) return;
+  if (sk_server_[0]) {
+    lv_label_set_text_fmt(sk_lost_lbl_,
+                          "Signal K connection lost - %s", sk_server_);
+  } else {
+    lv_label_set_text(sk_lost_lbl_, "Signal K connection lost");
+  }
+  // Keep above the live content even after layout swaps reparent it.
+  lv_obj_move_foreground(sk_lost_);
+  lv_obj_clear_flag(sk_lost_, LV_OBJ_FLAG_HIDDEN);
+}
+
+void StatusOverlay::hide_sk_lost() {
+  if (!sk_lost_) return;
+  lv_obj_add_flag(sk_lost_, LV_OBJ_FLAG_HIDDEN);
 }
 
 void StatusOverlay::set_n2k(int64_t rx_idle_seconds, unsigned clients) {

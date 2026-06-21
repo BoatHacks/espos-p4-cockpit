@@ -20,6 +20,19 @@ class StatusOverlay {
   void set_n2k(int64_t rx_idle_seconds, unsigned clients);
   void set_uptime_heap(uint32_t uptime_s, uint32_t free_heap);
 
+  // Record the configured SK server so the connection-lost banner can
+  // name it. Call once at boot with the same host/port handed to the
+  // SensESP builder.
+  void set_sk_server(const char* host, uint16_t port);
+
+  // Show / hide a prominent full-width "connection lost" banner. Lives
+  // at screen level (NOT inside the status strip), so it stays visible
+  // even when a layout disables the strip via `status_overlay: false`.
+  // Driven from the SK WS connection-state consumer: shown on
+  // Disconnected, hidden on Connected.
+  void show_sk_lost();
+  void hide_sk_lost();
+
   lv_obj_t* content_root() { return content_root_; }
 
   // Show or hide the strip. When hidden, content_root() expands to
@@ -36,6 +49,9 @@ class StatusOverlay {
   lv_obj_t* lbl_sk_ = nullptr;
   lv_obj_t* lbl_n2k_ = nullptr;
   lv_obj_t* lbl_sys_ = nullptr;
+  lv_obj_t* sk_lost_ = nullptr;       // screen-level connection-lost banner
+  lv_obj_t* sk_lost_lbl_ = nullptr;   // its text
+  char sk_server_[40] = "";           // "host:port" for the banner text
   bool visible_ = true;
 };
 
