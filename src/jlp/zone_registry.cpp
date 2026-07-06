@@ -3,9 +3,6 @@
 #include <Arduino.h>
 #include "esp_log.h"
 #include "lvgl.h"
-#include "sensesp.h"
-#include "sensesp/signalk/signalk_ws_client.h"
-#include "sensesp_app.h"
 
 #include "subject_registry.h"
 
@@ -101,10 +98,10 @@ void ZoneRegistry::apply_meta(const std::string& path,
     map_[path] = std::move(zs);
     changed = true;
   }
-  // No per-path logging here — apply_meta runs in a batch of dozens
-  // right after every layout push (sendMeta=all rebroadcast), and the
-  // remote-log TCP write per line was itself a meaningful chunk of the
-  // event_loop stall this batching is meant to cure.
+  // No per-path logging here — apply_meta fires once per bound path in
+  // a burst right after every layout push (sendMeta=all rebroadcast),
+  // and the remote-log TCP write per line was itself a meaningful chunk
+  // of the event_loop stall we care about avoiding.
   if (!changed) return;
   // Notify the bound subject so widget observers re-fire and pick
   // up the just-loaded description / zones. The observer reads
@@ -130,51 +127,15 @@ const std::string& ZoneRegistry::description(const std::string& path) const {
   return it == descriptions_.end() ? empty : it->second;
 }
 
-void ZoneRegistry::drain_pending() {
-  std::vector<PendingMeta> batch;
-  if (xSemaphoreTake(pending_mutex_, 0) != pdTRUE) return;  // WS appending
-  batch.swap(pending_);
-  xSemaphoreGive(pending_mutex_);
-  for (auto& p : batch) {
-    apply_meta(p.path, p.doc.as<JsonObjectConst>());
-  }
-}
-
 void ZoneRegistry::hook_sk_ws() {
-  auto app = sensesp::SensESPApp::get();
-  if (!app) {
-    ESP_LOGW(TAG, "no SensESPApp yet — hook_sk_ws() must be called after the builder");
-    return;
-  }
-  auto ws = app->get_ws_client();
-  if (!ws) {
-    ESP_LOGW(TAG, "no WS client yet — hook_sk_ws skipped");
-    return;
-  }
-
-  // Static mutex so we don't need a destructor / leak a heap one.
-  pending_mutex_ = xSemaphoreCreateMutexStatic(&pending_mutex_buffer_);
-
-  // WS task: snapshot the meta and append to the pending buffer.
-  // NO per-delta onDelay — see the header comment on the firehose
-  // that flooded event_loop after a layout push.
-  ws->on_meta([](const String& path, const JsonObject& meta) {
-    PendingMeta entry;
-    entry.path.assign(path.c_str());
-    entry.doc.set(meta);
-    auto& reg = zones();
-    if (!reg.pending_mutex_) return;  // hook_sk_ws not finished yet
-    if (xSemaphoreTake(reg.pending_mutex_, pdMS_TO_TICKS(10)) == pdTRUE) {
-      reg.pending_.push_back(std::move(entry));
-      xSemaphoreGive(reg.pending_mutex_);
-    }
-  });
-
-  // event_loop drains the buffer at 50 ms cadence. Bounded queue
-  // pressure regardless of how many meta deltas SK floods at once.
-  sensesp::event_loop()->onRepeat(50, []() { zones().drain_pending(); });
-
-  ESP_LOGI(TAG, "subscribed to SK WS meta callback (batched)");
+  // Meta is now consumed per-path: SubjectRegistry::get_or_create
+  // creates one SKMetadataListener alongside each path's value listener,
+  // and its event_loop-side LambdaConsumer calls apply_meta directly.
+  // The removed SKWSClient::on_meta wildcard fired on the WS task and
+  // needed the pending_/drain buffer to keep from flooding event_loop;
+  // the per-path listener already runs on event_loop, so no buffer.
+  // Kept as a no-op for the boot call site.
+  ESP_LOGI(TAG, "zone meta wired per-path via SubjectRegistry");
 }
 
 ZoneRegistry& zones() {

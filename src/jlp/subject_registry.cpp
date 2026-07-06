@@ -2,8 +2,11 @@
 
 #include <Arduino.h>
 #include "esp_log.h"
+#include "sensesp/signalk/signalk_metadata_listener.h"
 #include "sensesp/signalk/signalk_value_listener.h"
 #include "sensesp/system/lambda_consumer.h"
+
+#include "zone_registry.h"
 
 static const char* TAG = "jlp.reg";
 
@@ -37,6 +40,39 @@ sensesp::SKValueListener<T>* attach(const std::string& path,
   listener->connect_to(std::make_shared<sensesp::LambdaConsumer<T>>(
       [subject, setter](T v) { setter(subject, v); }));
   return listener;
+}
+
+// Build a per-path metadata listener that feeds SK meta (zones +
+// description) for `path` into ZoneRegistry. Replaces the removed
+// SKWSClient::on_meta wildcard: instead of one hook receiving meta for
+// every path and self-filtering, each bound path gets its own listener
+// created here at bind time (the set of bound paths is exactly what we
+// need zones for).
+//
+// The LambdaConsumer fires on the event_loop task (SKMetadataListener
+// is a ValueProducer drained there), so apply_meta — which calls
+// lv_subject_notify — is safe to invoke directly with no marshaling.
+//
+// Same leak-is-bounded lifetime as attach(): `new`-allocated and never
+// freed. SKListener now has a destructor that unregisters, but there is
+// still no removal path from the SubjectRegistry side (subjects live
+// for the device lifetime, see garbage_collect), so the listener must
+// outlive the subscription and matches the SKValueListener pattern.
+void attach_meta(const std::string& path) {
+  auto* listener = new sensesp::SKMetadataListener(
+      String(path.c_str()), kListenDelayMs);
+  std::string p = path;
+  listener->connect_to(
+      std::make_shared<sensesp::LambdaConsumer<sensesp::SKMetaView>>(
+          [p](const sensesp::SKMetaView& m) {
+            // raw is the full received meta document; its ["value"] is
+            // the meta object {units, description, zones, ...} that
+            // apply_meta parses. Null on a default (no-data-yet) view.
+            if (!m.raw) return;
+            JsonObjectConst meta = (*m.raw)["value"].as<JsonObjectConst>();
+            if (meta.isNull()) return;
+            zones().apply_meta(p, meta);
+          }));
 }
 
 }  // namespace
@@ -100,13 +136,15 @@ lv_subject_t* SubjectRegistry::get_or_create(const std::string& path,
       break;
   }
 
+  // Also subscribe to this path's SK metadata (zones + description) so
+  // ZoneRegistry can tint bound widgets and swap labels to human names.
+  // One SKMetadataListener per path, created exactly once here alongside
+  // the value listener (both self-register for the next WS subscribe).
+  attach_meta(path);
+
   lv_subject_t* sub = &slot.entry->subject;
   map_.emplace(path, std::move(slot));
   ESP_LOGI(TAG, "created subject for %s (kind=%d)", path.c_str(), (int)kind);
-
-  // Zones are populated by ZoneRegistry from SK meta deltas pushed
-  // in-stream when the WS subscribed with sendMeta=all. No explicit
-  // fetch needed here.
 
   return sub;
 }

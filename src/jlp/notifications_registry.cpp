@@ -2,10 +2,11 @@
 
 #include <Arduino.h>
 #include <algorithm>
+#include <string_view>
 
 #include "esp_log.h"
 #include "sensesp.h"
-#include "sensesp/signalk/signalk_ws_client.h"
+#include "sensesp/signalk/signalk_prefix_listener.h"
 #include "sensesp/system/lambda_consumer.h"
 #include "sensesp_app.h"
 
@@ -148,23 +149,6 @@ void NotificationsRegistry::fire_observers() {
   for (const auto& s : snapshot) s.cb();
 }
 
-void NotificationsRegistry::drain_pending() {
-  // Take the buffer under the lock as quickly as possible, then run
-  // apply() on each item outside the lock so the WS callback can
-  // keep appending. apply() fires observers, which on the event_loop
-  // task is allowed to be slow (it runs LVGL through the alert
-  // overlay etc.) — must not block the WS task on it.
-  std::vector<Pending> batch;
-  if (xSemaphoreTake(pending_mutex_, 0) == pdTRUE) {
-    batch.swap(pending_);
-    xSemaphoreGive(pending_mutex_);
-  } else {
-    return;  // WS is appending; pick up next tick
-  }
-  for (auto& p : batch) {
-    apply(p.suffix, p.doc.as<JsonVariantConst>());
-  }
-}
 
 void NotificationsRegistry::hook_sk_ws() {
   auto app = sensesp::SensESPApp::get();
@@ -178,67 +162,37 @@ void NotificationsRegistry::hook_sk_ws() {
     return;
   }
 
-  // Static mutex so we don't need a destructor / leak a heap one.
-  pending_mutex_ = xSemaphoreCreateMutexStatic(&pending_mutex_buffer_);
+  // Observe the whole notifications.* family via a prefix listener.
+  // notifications paths are dynamic — the server raises alarms on paths
+  // we can't enumerate in advance — so no per-path SKValueListener can
+  // cover them. The listener's LambdaConsumer fires on the event_loop
+  // task (SKPrefixListener is a ValueProducer drained there), so apply()
+  // — which touches the alert overlay (LVGL, event_loop-only) — is safe
+  // to call directly. (void)-discard the listener: like every SK
+  // listener it lives for the device lifetime; SKListener has no
+  // removal path from here.
+  // Derive the strip length from the prefix so the two can't drift.
+  static constexpr std::string_view kPrefix = "notifications.";
+  // Small period (not the 1 s default) so an alarm reaches the overlay
+  // with minimal latency — SK's `period` is the min interval between
+  // updates, and notification deltas are change-driven and infrequent.
+  constexpr int kNotifPeriodMs = 100;
+  auto* listener =
+      new sensesp::SKPrefixListener(String(kPrefix.data()), kNotifPeriodMs);
+  listener->connect_to(
+      std::make_shared<sensesp::LambdaConsumer<sensesp::SKPathValue>>(
+          [](const sensesp::SKPathValue& pv) {
+            // pv.path is the full "notifications.<suffix>"; strip the
+            // prefix to the key apply() expects.
+            std::string path(pv.path.c_str());
+            if (path.size() < kPrefix.size()) return;
+            notifications().apply(path.substr(kPrefix.size()), pv.value);
+          }));
+  // No manual subscribe frame needed: SKPrefixListener is an SKListener,
+  // so it self-registers and SKWSClient::subscribe_listeners sends its
+  // "notifications.*" path on every (re)connect.
 
-  // WS task: append to the pending buffer. NO per-delta event_loop
-  // onDelay — that was wedging event_loop's queue when SK delivered
-  // 50+ notifications.* values inside a single ms (typical post-
-  // reconnect storm). Single mutex take per delta; cheap.
-  ws->on_value([](const String& path, const JsonVariantConst& value) {
-    const char* p = path.c_str();
-    constexpr const char* kPrefix = "notifications.";
-    constexpr size_t kPrefixLen = 14;
-    if (strncmp(p, kPrefix, kPrefixLen) != 0) return;
-    Pending entry;
-    entry.suffix.assign(p + kPrefixLen);
-    entry.doc.set(value);
-    auto& reg = notifications();
-    if (!reg.pending_mutex_) return;  // hook_sk_ws not finished yet
-    if (xSemaphoreTake(reg.pending_mutex_, pdMS_TO_TICKS(10)) == pdTRUE) {
-      reg.pending_.push_back(std::move(entry));
-      xSemaphoreGive(reg.pending_mutex_);
-    }
-    // On lock contention we drop the delta. The 10 ms timeout is
-    // generous compared to the drain critical section (microseconds);
-    // a miss here means the consumer was wedged for >10 ms which is
-    // a separate problem worth surfacing as a missed notification.
-  });
-
-  // event_loop drains the buffer at 50 ms cadence. Bounded queue
-  // pressure regardless of WS rate; up to 50 ms of latency before
-  // an alarm reaches the overlay, which is well below human
-  // perception for a helm display.
-  sensesp::event_loop()->onRepeat(50, []() {
-    notifications().drain_pending();
-  });
-
-  // SensESP opens the WS with `subscribe=none`; the per-listener
-  // subscribe machinery only adds paths that have an SKListener
-  // registered. We don't (and can't, dynamically) register one per
-  // notification path — they appear and disappear at runtime. Send
-  // an explicit wildcard subscribe so the server streams every
-  // notifications.* value delta to us.
-  //
-  // Wait until the WS is connected; SensESP fires the connection
-  // state into its ValueProducer, so subscribe via the event loop
-  // each time we (re)connect.
-  ws->connect_to(std::make_shared<sensesp::LambdaConsumer<sensesp::SKWSConnectionState>>(
-      [](sensesp::SKWSConnectionState state) {
-        if (state != sensesp::SKWSConnectionState::kSKWSConnected) return;
-        auto a = sensesp::SensESPApp::get();
-        if (!a) return;
-        auto w = a->get_ws_client();
-        if (!w) return;
-        String sub =
-            R"({"context":"vessels.self","subscribe":[)"
-            R"({"path":"notifications.*","format":"delta","policy":"instant"})"
-            R"(]})";
-        w->sendTXT(sub);
-        ESP_LOGI(TAG, "sent notifications.* subscribe frame");
-      }));
-
-  ESP_LOGI(TAG, "subscribed to SK WS value callback (notifications.*, batched)");
+  ESP_LOGI(TAG, "subscribed to notifications.* via SKPrefixListener");
 }
 
 NotificationsRegistry& notifications() {

@@ -33,11 +33,10 @@ void SunState::set_mode(const char* mode) {
 }
 
 void SunState::hook_sk_ws() {
-  // Per-path SKValueListener rather than the global on_value hook:
-  // on_value is a single-slot setter (would clobber the
-  // notifications-registry callback) and fires for every WS delta.
-  // A per-path listener filters upstream in SensESP and is included
-  // in the next subscribe frame automatically.
+  // A single exact path (environment.mode), so a plain per-path
+  // SKValueListener is the right fit — it filters upstream in SensESP
+  // and joins the next subscribe frame automatically. (Wildcard
+  // families like notifications.* use SKPrefixListener instead.)
   constexpr int kListenDelayMs = 1000;
   auto* mode = new sensesp::SKValueListener<String>("environment.mode",
                                                     kListenDelayMs);

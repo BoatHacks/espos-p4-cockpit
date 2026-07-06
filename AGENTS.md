@@ -9,10 +9,12 @@ NMEA 2000 gateway (TWAI rx/tx + a candump TCP server on port 2599).
 Companion projects:
 - **signalk-hmi-designer** — the SignalK webapp that designs and pushes
   layouts. Lives at `../signalk-hmi-designer`.
-- **SensESP** — symlinked at `../SensESP`, branch `local/jlp-bridge`,
-  carries the `sendMeta=all` + `on_meta` + `on_value` hooks the firmware
-  depends on. Revert to upstream `main` once PR #965 (or successors)
-  merges.
+- **SensESP** — symlinked at `../SensESP`, branch `jlp-bridge-v2` =
+  upstream `main` + `SKPrefixListener` (pending
+  [PR #1047](https://github.com/SignalK/SensESP/pull/1047)). The old
+  `sendMeta=all` + `on_meta` work already landed upstream; `on_meta`
+  was refactored into `SKMetadataListener`, which the firmware now
+  uses. Drop the symlink for the registry version once #1047 releases.
 - **sensesp-cockpit-display** / **sensesp-n2k-gateway** /
   **sensesp-ble-gateway** — sister libs, symlinked, contribute HAL, OTA,
   N2K gateway, candump server.
@@ -46,9 +48,10 @@ single feature.
    flip; a 500 ms reconciliation timer snaps back if no echo arrives.
 3. **LVGL is single-writer** on the `event_loop` task. The HTTP task
    parses + validates, then marshals build/swap onto event_loop via
-   `event_loop()->onDelay(0, ...)`. WS callbacks (`on_meta`,
-   `on_value`) marshal the same way. No `lv_*` call from any other
-   task. Ever.
+   `event_loop()->onDelay(0, ...)`. SK listener consumers
+   (`SKValueListener`, `SKMetadataListener`, `SKPrefixListener`)
+   already fire on event_loop, so their `lv_*` work needs no
+   marshaling. No `lv_*` call from any other task. Ever.
 4. **OSS only**, programmatic LVGL API only — no LVGL Pro / XML
    runtime / GPL deps.
 5. **Wire format is additive.** New optional fields are fine. Removing
@@ -77,14 +80,18 @@ wins at runtime.
 
 ## SignalK wiring
 
-- The SK WS subscribes with `sendMeta=all` (SensESP `local/jlp-bridge`
-  default).
-- `zone_registry` consumes meta deltas via `ws->on_meta()` and caches
-  `{zones, description}` per path. Widgets that bind a path read from
-  it on every value change. Zones live in **raw SK units**; match
-  against the raw value, not the display-scaled one.
-- `notifications_registry` consumes value deltas via `ws->on_value()`
-  filtered to `notifications.*`. Each notification is keyed by the
+- The SK WS subscribes with `sendMeta=all` (SensESP default), so
+  metadata deltas arrive in-stream.
+- `zone_registry` caches `{zones, description}` per path. The metadata
+  is fed by a per-path `SKMetadataListener` that `SubjectRegistry`
+  creates alongside each bound path's `SKValueListener` (the REST
+  cold-start fetch in `zone_fetch.cpp` also calls `apply_meta`).
+  Widgets that bind a path read from it on every value change. Zones
+  live in **raw SK units**; match against the raw value, not the
+  display-scaled one.
+- `notifications_registry` observes the whole `notifications.*` family
+  via an `SKPrefixListener("notifications.")` (they're dynamic — no
+  per-path listener can cover them). Each notification is keyed by the
   path-after-prefix; the registry tracks `{state, message}` and an
   `acked_` map for the local-ack feature.
 - **ACKing a notification** sends an inbound SK delta with
@@ -137,11 +144,17 @@ problem.
 ### SensESP symlink
 
 `SensESP=symlink://../SensESP` is named explicitly so the local
-checkout wins over the transitive `SignalK/SensESP>=3.3.0` declared by
-sister libs. If `.pio/libdeps/p4_cockpit/SensESP/` doesn't have
-`on_meta`/`on_value`, `rm -rf .pio/libdeps/p4_cockpit/SensESP && pio
-pkg install`. Revert to upstream `main` after PR #965+successors
-merges.
+checkout (branch `jlp-bridge-v2` = upstream main + `SKPrefixListener`,
+[PR #1047](https://github.com/SignalK/SensESP/pull/1047)) wins over the
+transitive `SignalK/SensESP>=3.3.0` from the sister libs. **Gotcha:**
+pio's symlink install *copies* files into
+`.pio/libdeps/p4_cockpit/SensESP`, and the sister libs' registry pin
+clobbers that copy with a stale/registry version — but `lib_ldf_mode =
+deep` actually compiles against `-I../SensESP/src` (the symlink source
+directly). So the `.pio/libdeps` copy is a red herring; the real
+source is `../SensESP`. If a build can't find a new SensESP symbol,
+confirm `../SensESP` is on the right branch, not the libdeps copy.
+Drop the symlink for the registry version once #1047 releases.
 
 ## Adding a widget kind
 
@@ -180,7 +193,7 @@ designer refuses to push widget kinds the device doesn't advertise.
 | `httpd_ota` (8080)| no            | OTA only |
 | `remote_log` (2323)| no           | TCP log forwarder |
 | `esp_timer` 1 ms  | no            | `lv_tick_inc(1)` only — lock-free |
-| SK WS task        | no directly   | `on_meta` / `on_value` marshal onto event_loop via `event_loop()->onDelay(0, ...)` |
+| SK WS task        | no            | Receives raw deltas onto a queue; `process_received_updates` drains + dispatches to listeners on the event_loop task |
 
 ## Repo conventions
 

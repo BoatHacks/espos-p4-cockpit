@@ -6,8 +6,6 @@
 #include <vector>
 
 #include <ArduinoJson.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
 
 namespace jlp {
 
@@ -33,10 +31,15 @@ struct Zone {
 // signalk-server when the WS subscription includes sendMeta=all
 // (default in SensESP since PR #965). No HTTP polling — zones arrive
 // alongside value deltas and update automatically if SK's metadata
-// changes.
+// changes. Meta is delivered per-path: SubjectRegistry creates one
+// SKMetadataListener per bound path whose event_loop-side consumer
+// calls apply_meta directly (the REST fetch in zone_fetch.cpp is a
+// cold-start fallback that also calls apply_meta).
 class ZoneRegistry {
  public:
-  // Wire into the SK WS client's meta callback at boot. Idempotent.
+  // Boot-time no-op kept for the call site. Zone metadata is wired
+  // per-path by SubjectRegistry::get_or_create, not through a WS
+  // wildcard here.
   void hook_sk_ws();
 
   // Returns the zone matching `raw_value` for `path`, or nullptr if
@@ -52,31 +55,15 @@ class ZoneRegistry {
   // operator-facing identifier of the relay.
   const std::string& description(const std::string& path) const;
 
-  // Manually feed a meta object (e.g. from a test). Normally not
-  // called by user code — the WS callback does this.
+  // Feed a meta object for `path`. Called on the event_loop task by the
+  // per-path SKMetadataListener consumer (SubjectRegistry) and by the
+  // REST cold-start fallback (zone_fetch.cpp); also usable from a test.
+  // Calls lv_subject_notify, so it MUST run on event_loop.
   void apply_meta(const std::string& path, const JsonObjectConst& meta);
 
  private:
-  // WS-task → event_loop hand-off, same pattern as
-  // NotificationsRegistry. The on_meta callback appends to pending_
-  // under pending_mutex_; a 50 ms event_loop timer drains the whole
-  // batch. With sendMeta=all, SK re-broadcasts meta for every known
-  // path on (re)connect / after a layout push — dozens at once on a
-  // real boat. The old per-delta onDelay(0) flooded event_loop's
-  // queue with that burst and could stall a concurrent layout apply
-  // past its 25 s budget (and trip the event_loop watchdog).
-  struct PendingMeta {
-    std::string path;
-    JsonDocument doc;
-  };
-  void drain_pending();
-
   std::unordered_map<std::string, std::vector<Zone>> map_;
   std::unordered_map<std::string, std::string> descriptions_;
-
-  std::vector<PendingMeta> pending_;
-  StaticSemaphore_t pending_mutex_buffer_{};
-  SemaphoreHandle_t pending_mutex_ = nullptr;
 };
 
 ZoneRegistry& zones();
