@@ -31,6 +31,7 @@
 #include "jlp/layout/store.h"
 #include "jlp/net/http_api.h"
 #include "jlp/net/layout_fetch.h"
+#include "jlp/net/sk_server.h"
 #include "jlp/net/zone_fetch.h"
 #include "jlp/zone_registry.h"
 #include "jlp/net/mdns_announce.h"
@@ -95,10 +96,16 @@ void setup() {
                  ->set_sk_server(kSkHost, kSkPort)
                  ->get_app();
 
-  // Tell the overlay which server the connection-lost banner should
-  // name. (ws_client->get_server_address() is empty until the first
-  // connect, so use the configured literals.)
-  jlp::overlay().set_sk_server(kSkHost, kSkPort);
+  // The JLP HTTP calls (layout fetch, zone/value REST) and the
+  // connection-lost banner target whatever SensESP is configured to use
+  // — set via the SensESP config web UI — so the whole panel follows
+  // one server setting instead of the compile-time constant. kSkHost /
+  // kSkPort are only the fallback until SensESP resolves an address.
+  jlp::sk_server_set_default(kSkHost, kSkPort);
+  {
+    jlp::SkServer s = jlp::sk_server();
+    jlp::overlay().set_sk_server(s.host.c_str(), s.port);
+  }
 
   // After every layout swap, restart the SK WS only when the new
   // layout introduced bound paths SensESP isn't already subscribed
@@ -122,7 +129,8 @@ void setup() {
         // ~25 ms per path on a healthy LAN; the fetch task drives
         // them serially so the burst stays small.
         std::vector<std::string> v(new_paths.begin(), new_paths.end());
-        jlp::zone_fetch_for_paths(kSkHost, kSkPort, v);
+        jlp::SkServer s = jlp::sk_server();
+        jlp::zone_fetch_for_paths(s.host, s.port, v);
         // ws->restart() is intentionally NOT called here anymore.
         // The reconnect floods event_loop with SK's initial-state
         // burst for 30+ seconds, wedging the next push or
@@ -158,9 +166,13 @@ void setup() {
       jlp::idle_dimmer().wake();
     }
   });
-  jlp::layout_fetch_async_apply(kSkHost, kSkPort);
-
   // --- SK WS state into the overlay ---
+  //
+  // The boot layout fetch is deferred to the first successful WS
+  // connect rather than fired here: SensESP resolves the server
+  // address (config value, or mDNS) only once it connects, so
+  // sk_server() is empty until then. Fetching on connect means the GET
+  // targets the SensESP-configured server, not the compiled default.
   auto ws_client = app->get_ws_client();
   ws_client->connect_to(new LambdaConsumer<SKWSConnectionState>(
       [](SKWSConnectionState state) {
@@ -168,10 +180,20 @@ void setup() {
         // is a TaskQueueProducer drained there), so lv_* calls here
         // need no marshaling.
         switch (state) {
-          case SKWSConnectionState::kSKWSConnected:
+          case SKWSConnectionState::kSKWSConnected: {
             jlp::overlay().set_sk("ok");
             jlp::overlay().hide_sk_lost();
+            // Now that SensESP has resolved the server, point the
+            // banner + one-shot boot layout fetch at it.
+            jlp::SkServer s = jlp::sk_server();
+            jlp::overlay().set_sk_server(s.host.c_str(), s.port);
+            static bool s_boot_fetch_done = false;
+            if (!s_boot_fetch_done) {
+              s_boot_fetch_done = true;
+              jlp::layout_fetch_async_apply(s.host, s.port);
+            }
             break;
+          }
           case SKWSConnectionState::kSKWSConnecting:
             jlp::overlay().set_sk("connecting");
             break;
