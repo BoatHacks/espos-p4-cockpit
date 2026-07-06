@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <algorithm>
+#include <string_view>
 
 #include "esp_log.h"
 #include "sensesp.h"
@@ -170,45 +171,28 @@ void NotificationsRegistry::hook_sk_ws() {
   // to call directly. (void)-discard the listener: like every SK
   // listener it lives for the device lifetime; SKListener has no
   // removal path from here.
-  constexpr const char* kPrefix = "notifications.";
-  constexpr size_t kPrefixLen = 14;
-  auto* listener = new sensesp::SKPrefixListener(String(kPrefix));
+  // Derive the strip length from the prefix so the two can't drift.
+  static constexpr std::string_view kPrefix = "notifications.";
+  // Small period (not the 1 s default) so an alarm reaches the overlay
+  // with minimal latency — SK's `period` is the min interval between
+  // updates, and notification deltas are change-driven and infrequent.
+  constexpr int kNotifPeriodMs = 100;
+  auto* listener =
+      new sensesp::SKPrefixListener(String(kPrefix.data()), kNotifPeriodMs);
   listener->connect_to(
       std::make_shared<sensesp::LambdaConsumer<sensesp::SKPathValue>>(
           [](const sensesp::SKPathValue& pv) {
             // pv.path is the full "notifications.<suffix>"; strip the
             // prefix to the key apply() expects.
             std::string path(pv.path.c_str());
-            if (path.size() < kPrefixLen) return;
-            notifications().apply(path.substr(kPrefixLen), pv.value);
+            if (path.size() < kPrefix.size()) return;
+            notifications().apply(path.substr(kPrefix.size()), pv.value);
           }));
+  // No manual subscribe frame needed: SKPrefixListener is an SKListener,
+  // so it self-registers and SKWSClient::subscribe_listeners sends its
+  // "notifications.*" path on every (re)connect.
 
-  // SensESP opens the WS with `subscribe=none`; the per-listener
-  // subscribe machinery only adds paths that have an SKListener
-  // registered. We don't (and can't, dynamically) register one per
-  // notification path — they appear and disappear at runtime. Send
-  // an explicit wildcard subscribe so the server streams every
-  // notifications.* value delta to us.
-  //
-  // Wait until the WS is connected; SensESP fires the connection
-  // state into its ValueProducer, so subscribe via the event loop
-  // each time we (re)connect.
-  ws->connect_to(std::make_shared<sensesp::LambdaConsumer<sensesp::SKWSConnectionState>>(
-      [](sensesp::SKWSConnectionState state) {
-        if (state != sensesp::SKWSConnectionState::kSKWSConnected) return;
-        auto a = sensesp::SensESPApp::get();
-        if (!a) return;
-        auto w = a->get_ws_client();
-        if (!w) return;
-        String sub =
-            R"({"context":"vessels.self","subscribe":[)"
-            R"({"path":"notifications.*","format":"delta","policy":"instant"})"
-            R"(]})";
-        w->sendTXT(sub);
-        ESP_LOGI(TAG, "sent notifications.* subscribe frame");
-      }));
-
-  ESP_LOGI(TAG, "subscribed to SK WS value callback (notifications.*, batched)");
+  ESP_LOGI(TAG, "subscribed to notifications.* via SKPrefixListener");
 }
 
 NotificationsRegistry& notifications() {
