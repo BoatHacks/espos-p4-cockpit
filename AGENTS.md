@@ -122,12 +122,23 @@ wins at runtime.
 ## Build / flash / debug
 
 ```bash
-pio run -e p4_cockpit                  # build
+pio run -e p4_cockpit                  # build (7B, the default)
 pio run -e p4_cockpit -t upload        # flash via /dev/ttyACM0
 pio device monitor                     # local serial
 nc <device-ip> 2323                    # remote ESP-IDF log stream
 curl -sf http://<device-ip>:8081/hello | jq .
 ```
+
+Two board targets share a common `[common]` base in `platformio.ini`:
+
+- `p4_cockpit` — Waveshare 7B (1024×600 EK79007), onboard N2K gateway.
+- `p4_cockpit_4b` — Waveshare 4B (720×720 ST7703). The 4B has no CAN
+  transceiver, so `COCKPIT_BOARD_4B` compiles the N2K gateway out and
+  swaps the board HAL. Build/flash with `-e p4_cockpit_4b`.
+
+`/hello` reports the live panel geometry from the active HAL
+(`display.w`/`display.h`), so the designer maps its canvas to whichever
+board is connected.
 
 If flashing dies with `OSError: [Errno 71] Protocol error` on
 `_setDTRandRTS`, the cdc_acm CDC state is stuck. Manual download mode
