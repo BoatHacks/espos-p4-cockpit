@@ -447,6 +447,10 @@ esp_err_t hello_get(httpd_req_t* req) {
     display["w"] = d->width();
     display["h"] = d->height();
   } else {
+    // Shouldn't be reachable once /hello serves; log it so a future
+    // boot-order regression is visible instead of silently handing the
+    // designer the wrong board's resolution.
+    ESP_LOGW(TAG, "get_display() null in /hello; falling back to 1024x600");
     display["w"] = 1024;
     display["h"] = 600;
   }
