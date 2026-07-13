@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include "sensesp.h"
+#include "sensesp_app.h"
+#include "sensesp/signalk/signalk_ws_client.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -33,6 +35,9 @@ struct FetchArgs {
   std::string host;
   uint16_t port;
   std::vector<std::string> paths;
+  // SK access token (bare JWT, no "Bearer " prefix), captured on the
+  // caller's thread. Empty when the server is open or no token yet.
+  std::string token;
 };
 
 // A parsed meta blob waiting to be applied on event_loop. The
@@ -57,14 +62,27 @@ struct ValueResult {
 
 // Read an HTTP GET body into `body`. Returns false on any
 // open / status / empty-read failure. Reuses the passed-in client so
-// the caller can keep one connection across the whole batch.
+// the caller can keep one connection across the whole batch. `token`,
+// when non-empty, is sent as a Bearer credential — required once the SK
+// server has security enabled, or every /meta and /value request 401s
+// and quiet paths (e.g. a steady tank level) never get their zones.
 bool http_get_body(esp_http_client_handle_t client, const std::string& url,
-                   std::string* body) {
+                   const std::string& token, std::string* body) {
   esp_http_client_set_url(client, url.c_str());
+  if (!token.empty()) {
+    const std::string bearer = "Bearer " + token;
+    esp_http_client_set_header(client, "Authorization", bearer.c_str());
+  }
   if (esp_http_client_open(client, 0) != ESP_OK) return false;
   int content_length = esp_http_client_fetch_headers(client);
   int status = esp_http_client_get_status_code(client);
   if (status != 200) {
+    // 401 is the signature of a secured SK server with a missing/stale
+    // token — surface it, since it silently strips zones from quiet
+    // paths and is otherwise invisible.
+    if (status == 401) {
+      ESP_LOGW(TAG, "401 on %s — SK token missing or rejected", url.c_str());
+    }
     esp_http_client_close(client);
     return false;
   }
@@ -87,9 +105,10 @@ bool http_get_body(esp_http_client_handle_t client, const std::string& url,
 // blob carries zones or a description. Does NOT touch event_loop — the
 // whole batch is drained in a single onDelay(0) by the caller.
 void fetch_meta(esp_http_client_handle_t client, const std::string& url,
-                const std::string& path, std::vector<MetaResult>* out) {
+                const std::string& token, const std::string& path,
+                std::vector<MetaResult>* out) {
   std::string body;
-  if (!http_get_body(client, url, &body)) return;
+  if (!http_get_body(client, url, token, &body)) return;
 
   MetaResult r;
   DeserializationError de = deserializeJson(r.doc, body);
@@ -114,9 +133,10 @@ void fetch_meta(esp_http_client_handle_t client, const std::string& url,
 // stays off event_loop; the value is extracted here and the result
 // applied in the batch drain.
 void fetch_value(esp_http_client_handle_t client, const std::string& url,
-                 const std::string& path, std::vector<ValueResult>* out) {
+                 const std::string& token, const std::string& path,
+                 std::vector<ValueResult>* out) {
   std::string body;
-  if (!http_get_body(client, url, &body)) return;
+  if (!http_get_body(client, url, token, &body)) return;
 
   JsonDocument doc;
   if (deserializeJson(doc, body)) return;
@@ -173,10 +193,10 @@ void fetch_task(void* arg) {
       "/signalk/v1/api/vessels/self/";
   for (const auto& path : a->paths) {
     const std::string slashed = slashify(path);
-    fetch_meta(client, base + slashed + "/meta", path, metas.get());
+    fetch_meta(client, base + slashed + "/meta", a->token, path, metas.get());
     // SK's /value endpoint returns the full node ({value, meta,
     // $source, ...}); we read the `value` member out of that wrapper.
-    fetch_value(client, base + slashed, path, values.get());
+    fetch_value(client, base + slashed, a->token, path, values.get());
   }
   esp_http_client_cleanup(client);
   ESP_LOGI(TAG, "fetched meta + value for %u paths (%u meta, %u val)",
@@ -221,7 +241,17 @@ void fetch_task(void* arg) {
 void zone_fetch_for_paths(const std::string& sk_host, uint16_t sk_port,
                           const std::vector<std::string>& paths) {
   if (paths.empty()) return;
-  auto* a = new FetchArgs{sk_host, sk_port, paths};
+  // Grab the SK access token here, on the caller's thread, so the fetch
+  // task never touches the WS client cross-thread. Empty string when
+  // the server is open or no token has been obtained yet, which the
+  // fetch treats as an unauthenticated request.
+  std::string token;
+  if (auto app = sensesp::SensESPApp::get()) {
+    if (auto ws = app->get_ws_client()) {
+      token = ws->get_auth_token().c_str();
+    }
+  }
+  auto* a = new FetchArgs{sk_host, sk_port, paths, std::move(token)};
   if (xTaskCreate(fetch_task, "jlp_zonefetch", 8192, a, 4, NULL) != pdPASS) {
     ESP_LOGE(TAG, "failed to spawn zone fetch task");
     delete a;
