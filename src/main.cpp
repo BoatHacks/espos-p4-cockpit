@@ -260,15 +260,22 @@ void setup() {
     } else if (esp_get_free_heap_size() < 64 * 1024) {
       ok = false;
       reason = "heap exhausted";
-    } else if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < 40 * 1024) {
+    } else if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < 40 * 1024 ||
+               heap_caps_get_largest_free_block(
+                   MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) < 12 * 1024) {
       // esp_get_free_heap_size() is total (DRAM + 32 MB PSRAM), so it
       // never trips on this board. But task stacks (e.g. SensESP's 8 KB
       // WS connect worker) must come from INTERNAL RAM — if that pool
-      // leaks down over days, xTaskCreate fails and the SK WS can never
-      // reconnect, stranding the helm on "connection lost" while total
-      // heap still reads ~30 MB. Reboot to recover; 40 KB leaves margin
-      // above the worker's 8 KB need for ISRs and other tasks. Applies to
-      // both boards, so it sits outside the 4B guard below.
+      // leaks or fragments over days, xTaskCreate fails and the SK WS can
+      // never reconnect, stranding the helm on "connection lost" while
+      // total heap still reads ~30 MB. Reboot to recover.
+      //
+      // Two conditions, because xTaskCreate needs a *contiguous* 8-bit
+      // internal block, not just total free bytes: the 40 KB free-size
+      // reserve catches slow depletion, and the 12 KB largest-block check
+      // catches fragmentation (the 8 KB stack + TCB won't fit even when
+      // plenty of total free remains). Applies to both boards, so it sits
+      // outside the 4B guard below.
       ok = false;
       reason = "internal RAM exhausted";
 #ifndef COCKPIT_BOARD_4B
