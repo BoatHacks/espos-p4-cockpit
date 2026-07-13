@@ -16,11 +16,17 @@
 #include "freertos/task.h"
 #include "lvgl.h"
 
+#ifdef COCKPIT_BOARD_4B
+#include "sensesp_cockpit_display/hal/boards/waveshare_4b.h"
+#else
 #include "sensesp_cockpit_display/hal/boards/waveshare_7b.h"
+#endif
 #include "sensesp_cockpit_display/lvgl/lv_drivers.h"
 #include "sensesp_cockpit_display/net/http_ota.h"
 #include "sensesp_cockpit_display/net/remote_log.h"
+#ifndef COCKPIT_BOARD_4B
 #include "sensesp_n2k_gateway.h"
+#endif
 #include "sensesp_app_builder.h"
 #include "sensesp/signalk/signalk_ws_client.h"
 #include "sensesp/system/lambda_consumer.h"
@@ -56,8 +62,13 @@ static constexpr uint16_t kSkPort = 4100;
 void setup() {
   SetupLogging(ESP_LOG_INFO);
 
+#ifdef COCKPIT_BOARD_4B
+  auto* display = new Waveshare4BDisplay();
+  auto* touch = new Waveshare4BTouch();
+#else
   auto* display = new Waveshare7BDisplay();
   auto* touch = new Waveshare7BTouch();
+#endif
   lvgl_init(display, touch);
   jlp::overlay().init();
   jlp::overlay().set_hostname("p4-cockpit");
@@ -208,7 +219,13 @@ void setup() {
         }
       }));
 
-  // --- N2K gateway (unchanged from cockpit firmware) ---
+  // --- N2K gateway ---
+  //
+  // The 7B carries an onboard CAN transceiver on GPIO 21/22; the 4B
+  // (smart-86-box wall panel) has none, so the whole gateway compiles
+  // out there — no candump server, and no n2k-rx-stall watchdog (which
+  // would otherwise reboot-loop with no bus attached).
+#ifndef COCKPIT_BOARD_4B
   auto* receiver =
       new TwaiReceiver(TwaiReceiverConfig::waveshare_touch_lcd_7b());
   auto* transmitter = new TwaiTransmitter();
@@ -223,10 +240,15 @@ void setup() {
         receiver->stop();
         transmitter->stop();
       });
+#endif
 
-  // Watchdog: reboot on WiFi loss, heap exhaustion, or N2K rx stall
-  // (only after we have ever received a frame).
-  event_loop()->onRepeat(30000, [receiver]() {
+  // Watchdog: reboot on WiFi loss, heap exhaustion, or (7B only) N2K
+  // rx stall once we've ever received a frame.
+  event_loop()->onRepeat(30000, [
+#ifndef COCKPIT_BOARD_4B
+                                     receiver
+#endif
+  ]() {
     static int consecutive_fail = 0;
     bool ok = true;
     const char* reason = "";
@@ -237,10 +259,12 @@ void setup() {
     } else if (esp_get_free_heap_size() < 64 * 1024) {
       ok = false;
       reason = "heap exhausted";
+#ifndef COCKPIT_BOARD_4B
     } else if (receiver->ever_received() &&
                receiver->seconds_since_last_rx() > 30) {
       ok = false;
       reason = "n2k rx stalled";
+#endif
     }
 
     if (!ok) {
@@ -296,7 +320,11 @@ void setup() {
       "el_wdt", 2560, nullptr, configMAX_PRIORITIES - 1, nullptr);
 
   // 1s status tick: WiFi / N2K / uptime / heap into the overlay.
-  event_loop()->onRepeat(1000, [receiver, n2k_server]() {
+  event_loop()->onRepeat(1000, [
+#ifndef COCKPIT_BOARD_4B
+                                    receiver, n2k_server
+#endif
+  ]() {
     if (WiFi.status() == WL_CONNECTED) {
       char buf[40];
       snprintf(buf, sizeof(buf), "%s %ddBm", WiFi.SSID().c_str(),
@@ -306,14 +334,21 @@ void setup() {
       jlp::overlay().set_wifi("down");
     }
 
+#ifndef COCKPIT_BOARD_4B
     int64_t rx_idle =
         receiver->ever_received() ? receiver->seconds_since_last_rx() : -1;
     jlp::overlay().set_n2k(rx_idle, n2k_server->connected_clients());
+#else
+    // No CAN transceiver on the 4B — report the gateway as absent
+    // rather than leaving the field showing a stale placeholder.
+    jlp::overlay().set_n2k(-1, 0);
+#endif
 
     jlp::overlay().set_uptime_heap(millis() / 1000,
                                    esp_get_free_heap_size());
   });
 
+#ifndef COCKPIT_BOARD_4B
   event_loop()->onRepeat(5000, [receiver, n2k_server]() {
     int64_t rx_idle = receiver->seconds_since_last_rx();
     ESP_LOGI("main", "n2k: rx_idle=%llds cl=%u | heap=%lu",
@@ -321,6 +356,7 @@ void setup() {
              (unsigned)n2k_server->connected_clients(),
              (unsigned long)esp_get_free_heap_size());
   });
+#endif
 }
 
 void loop() { event_loop()->tick(); }

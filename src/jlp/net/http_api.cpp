@@ -16,6 +16,8 @@
 #include <string>
 #include <vector>
 
+#include "sensesp_cockpit_display/lvgl/lv_drivers.h"
+
 #include "../layout/layout_manager.h"
 #include "../layout/store.h"
 
@@ -437,8 +439,21 @@ esp_err_t hello_get(httpd_req_t* req) {
   resp["firmware"] = "p4-cockpit-jlp-0.1.5";
   resp["store"] = jlp::store_boot_report();  // persistence backend status
   JsonObject display = resp["display"].to<JsonObject>();
-  display["w"] = 1024;
-  display["h"] = 600;
+  // Report the live panel geometry from the active board HAL so the
+  // designer maps its canvas to the real resolution (720x720 on the
+  // 4B, 1024x600 on the 7B). Fall back to the 7B size only if the
+  // driver isn't wired yet, which can't happen once /hello serves.
+  if (auto* d = sensesp_cockpit_display::get_display()) {
+    display["w"] = d->width();
+    display["h"] = d->height();
+  } else {
+    // Shouldn't be reachable once /hello serves; log it so a future
+    // boot-order regression is visible instead of silently handing the
+    // designer the wrong board's resolution.
+    ESP_LOGW(TAG, "get_display() null in /hello; falling back to 1024x600");
+    display["w"] = 1024;
+    display["h"] = 600;
+  }
   display["idle_timeout"] = true;
   display["idle_dim_pct"] = true;
   resp["widgets"] = serialized(kWidgetCatalogJson);
