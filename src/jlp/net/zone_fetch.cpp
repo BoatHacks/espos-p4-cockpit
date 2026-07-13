@@ -6,6 +6,7 @@
 #include "sensesp_app.h"
 #include "sensesp/signalk/signalk_ws_client.h"
 #include "esp_http_client.h"
+#include "esp_crt_bundle.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -35,9 +36,11 @@ struct FetchArgs {
   std::string host;
   uint16_t port;
   std::vector<std::string> paths;
-  // SK access token (bare JWT, no "Bearer " prefix), captured on the
-  // caller's thread. Empty when the server is open or no token yet.
+  // Captured on the caller's thread because fetch_task must not touch
+  // the SKWSClient. `ssl` mirrors the WS transport so the REST scheme
+  // matches it (see zone_fetch_for_paths / http_get_body).
   std::string token;
+  bool ssl = false;
 };
 
 // A parsed meta blob waiting to be applied on event_loop. The
@@ -168,8 +171,16 @@ void fetch_task(void* arg) {
   // setting a new URL on the existing handle, which avoids the per-
   // request TCP handshake.
   esp_http_client_config_t cfg = {};
-  cfg.url = "http://placeholder";  // will be overridden per-path
+  cfg.url = a->ssl ? "https://placeholder" : "http://placeholder";
   cfg.timeout_ms = 3000;
+  if (a->ssl) {
+    // Match how SensESP's WS client trusts the server: attach the built-
+    // in cert bundle and skip the CN check (SK servers commonly present
+    // a self-signed / IP cert). Without a transport config the TLS
+    // handshake can't complete.
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    cfg.skip_cert_common_name_check = true;
+  }
   esp_http_client_handle_t client = esp_http_client_init(&cfg);
   if (!client) {
     ESP_LOGW(TAG, "http client init failed");
@@ -188,9 +199,14 @@ void fetch_task(void* arg) {
   auto metas = std::make_shared<std::vector<MetaResult>>();
   auto values = std::make_shared<std::vector<ValueResult>>();
 
+  // Mirror the WS transport: HTTPS when SensESP negotiated TLS, plain
+  // HTTP otherwise. The token rides whichever scheme the WS itself uses
+  // to obtain it, so a plaintext deployment gains no extra exposure here
+  // (the WS access-request already sent it in the clear); a TLS
+  // deployment keeps it encrypted.
   const std::string base =
-      "http://" + a->host + ":" + std::to_string(a->port) +
-      "/signalk/v1/api/vessels/self/";
+      (a->ssl ? "https://" : "http://") + a->host + ":" +
+      std::to_string(a->port) + "/signalk/v1/api/vessels/self/";
   for (const auto& path : a->paths) {
     const std::string slashed = slashify(path);
     fetch_meta(client, base + slashed + "/meta", a->token, path, metas.get());
@@ -246,12 +262,16 @@ void zone_fetch_for_paths(const std::string& sk_host, uint16_t sk_port,
   // the server is open or no token has been obtained yet, which the
   // fetch treats as an unauthenticated request.
   std::string token;
+  bool ssl = false;
   if (auto app = sensesp::SensESPApp::get()) {
     if (auto ws = app->get_ws_client()) {
       token = ws->get_auth_token().c_str();
+      // Match the REST scheme to the WS so a Bearer token is never sent
+      // over a *less* secure channel than the one that issued it.
+      ssl = ws->is_ssl_enabled();
     }
   }
-  auto* a = new FetchArgs{sk_host, sk_port, paths, std::move(token)};
+  auto* a = new FetchArgs{sk_host, sk_port, paths, std::move(token), ssl};
   if (xTaskCreate(fetch_task, "jlp_zonefetch", 8192, a, 4, NULL) != pdPASS) {
     ESP_LOGE(TAG, "failed to spawn zone fetch task");
     delete a;
