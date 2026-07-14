@@ -1,5 +1,6 @@
 #pragma once
 
+#include <set>
 #include <string>
 
 namespace jlp {
@@ -21,5 +22,14 @@ void put_string(const std::string& path, const std::string& value);
  *  message: ""}}`. Called by the alert overlay when the operator
  *  taps ACK on a pending notification. */
 void put_notification_ack(const std::string& path_after_prefix);
+
+// SensESP only subscribes at WS connect, so a path first bound by a
+// layout pushed afterwards never streams — its widget freezes at the
+// one-shot REST seed. This backfills that gap without a full
+// ws->restart() (whose reconnect burst wedges event_loop); the send is
+// marshalled onto event_loop internally, so it is callable from any task.
+/** Send an incremental SK subscribe (`{context, subscribe:[{path,
+ *  period}...]}`) for the newly-introduced `paths` over the open WS. */
+void subscribe_new_paths(const std::set<std::string>& paths);
 
 }  // namespace jlp
