@@ -38,6 +38,7 @@
 #include "jlp/layout/store.h"
 #include "jlp/net/http_api.h"
 #include "jlp/net/layout_fetch.h"
+#include "jlp/net/sk_put.h"
 #include "jlp/net/sk_server.h"
 #include "jlp/net/zone_fetch.h"
 #include "jlp/zone_registry.h"
@@ -119,22 +120,14 @@ void setup() {
     jlp::overlay().set_sk_server(s.host.c_str(), s.port);
   }
 
-  // After every layout swap, restart the SK WS only when the new
-  // layout introduced bound paths SensESP isn't already subscribed
-  // to. (SensESP subscribes once at on_connected; listeners added
-  // later are silently ignored until reconnect — so we only pay the
-  // reconnect cost when there's a real subscription gap.)
-  //
-  // Deferred to a fresh event_loop tick so the apply() that invoked
-  // us can return to the HTTP task and signal its done-semaphore
-  // *before* we start tearing down the WS. ws->restart() is
-  // synchronous and can take several seconds on cold reconnect; if
-  // we ran it inline, POST /layout would 504 on every first-push-
-  // after-boot (the only case that introduces a brand-new path set
-  // relative to the empty known_paths_ map).
+  // After a layout swap that introduces paths SensESP isn't already
+  // subscribed to (SensESP subscribes once at on_connected; listeners
+  // added later are ignored until the next connect), seed their values
+  // via REST and send an incremental WS subscribe so they stream live —
+  // without a full ws->restart() and its multi-second reconnect storm.
   jlp::layout_manager().set_post_swap_hook(
-      [app](bool new_paths_introduced,
-            const std::set<std::string>& new_paths) {
+      [](bool new_paths_introduced,
+         const std::set<std::string>& new_paths) {
         if (!new_paths_introduced) return;
         // Pull SK meta (zones + description) for just the newly-
         // introduced paths via HTTP REST. The per-path endpoint is
@@ -143,16 +136,18 @@ void setup() {
         std::vector<std::string> v(new_paths.begin(), new_paths.end());
         jlp::SkServer s = jlp::sk_server();
         jlp::zone_fetch_for_paths(s.host, s.port, v);
-        // ws->restart() is intentionally NOT called here anymore.
-        // The reconnect floods event_loop with SK's initial-state
-        // burst for 30+ seconds, wedging the next push or
-        // /screenshot. New SKValueListeners created lazily by
-        // widget builds don't get an immediate subscription, but
-        // they DO get filled by the zone_fetch_for_paths REST
-        // value seed above — same effect on the widget render
-        // without the WS storm. Once the panel power-cycles or
-        // the WS happens to reconnect on its own, the lazy
-        // listeners join the next subscribe frame normally.
+        // The REST fetch above seeds each new path's *current* value so
+        // the widget shows something immediately. But SensESP only
+        // subscribes at WS connect, so a path first bound by a push made
+        // after connect would otherwise never receive live deltas — its
+        // widget would sit frozen at the seed. Send an incremental
+        // subscribe for just the new paths so they start streaming now.
+        //
+        // This intentionally replaces a full ws->restart(): the restart's
+        // reconnect burst floods event_loop with SK's initial-state
+        // replay for 30+ seconds, wedging the next push / screenshot. An
+        // incremental subscribe adds only the new paths, no replay storm.
+        jlp::subscribe_new_paths(new_paths);
       });
 
   remote_log_start(2323);

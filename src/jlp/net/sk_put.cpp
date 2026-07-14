@@ -107,4 +107,35 @@ void put_notification_ack(const std::string& path_after_prefix) {
   ws->sendTXT(s);
 }
 
+void subscribe_new_paths(const std::set<std::string>& paths) {
+  if (paths.empty()) return;
+
+  auto app = sensesp::SensESPApp::get();
+  if (!app) return;
+  auto ws = app->get_ws_client();
+  if (!ws) return;
+
+  // Match the shape SensESP's own subscribe_listeners() sends: a
+  // vessels.self context and a subscribe array of {path, period}. With
+  // sendMeta=all (a connection-level flag), one subscription delivers
+  // both value and meta deltas, so this reuses the same period the
+  // SubjectRegistry creates its listeners with (1000 ms).
+  constexpr int kListenDelayMs = 1000;
+  JsonDocument doc;
+  JsonObject root = doc.to<JsonObject>();
+  root["context"] = "vessels.self";
+  JsonArray subscribe = root["subscribe"].to<JsonArray>();
+  for (const auto& p : paths) {
+    JsonObject entry = subscribe.add<JsonObject>();
+    entry["path"] = p;
+    entry["period"] = kListenDelayMs;
+  }
+
+  String s;
+  serializeJson(doc, s);
+  ESP_LOGI(TAG, "incremental subscribe for %u new path(s)",
+           (unsigned)paths.size());
+  ws->sendTXT(s);
+}
+
 }  // namespace jlp
