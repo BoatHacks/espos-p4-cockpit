@@ -23,17 +23,13 @@ void put_string(const std::string& path, const std::string& value);
  *  taps ACK on a pending notification. */
 void put_notification_ack(const std::string& path_after_prefix);
 
-/** Send an incremental SK subscribe frame for `paths` over the open WS.
- *
- *  SensESP subscribes to all its listeners exactly once, at WS connect.
- *  A path first bound by a layout pushed *after* connect therefore never
- *  joins the subscription, so its widget never receives live deltas
- *  (it shows only the one-shot REST value seed and then sits frozen).
- *  This sends `{context:"vessels.self", subscribe:[{path, period}...]}`
- *  for just the newly-introduced paths so they start streaming without
- *  a full ws->restart() (whose reconnect burst wedges event_loop).
- *
- *  Threading: event_loop task only (sendTXT is serialized there). */
+// SensESP only subscribes at WS connect, so a path first bound by a
+// layout pushed afterwards never streams — its widget freezes at the
+// one-shot REST seed. This backfills that gap without a full
+// ws->restart() (whose reconnect burst wedges event_loop); the send is
+// marshalled onto event_loop internally, so it is callable from any task.
+/** Send an incremental SK subscribe (`{context, subscribe:[{path,
+ *  period}...]}`) for the newly-introduced `paths` over the open WS. */
 void subscribe_new_paths(const std::set<std::string>& paths);
 
 }  // namespace jlp

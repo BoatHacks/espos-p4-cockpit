@@ -4,6 +4,7 @@
 #include <unordered_map>
 
 #include "esp_log.h"
+#include "sensesp.h"
 #include "sensesp/signalk/signalk_put_request.h"
 #include "sensesp/signalk/signalk_ws_client.h"
 #include "sensesp_app.h"
@@ -110,32 +111,39 @@ void put_notification_ack(const std::string& path_after_prefix) {
 void subscribe_new_paths(const std::set<std::string>& paths) {
   if (paths.empty()) return;
 
-  auto app = sensesp::SensESPApp::get();
-  if (!app) return;
-  auto ws = app->get_ws_client();
-  if (!ws) return;
+  // The post-swap hook that calls us runs synchronously inside
+  // LayoutManager::apply(), which at boot executes on the setup task —
+  // off event_loop. sendTXT must be serialized on event_loop with the
+  // rest of the WS traffic, so marshal the whole send there. Capture
+  // paths by value; the source set doesn't outlive this call.
+  sensesp::event_loop()->onDelay(0, [paths]() {
+    auto app = sensesp::SensESPApp::get();
+    if (!app) return;
+    auto ws = app->get_ws_client();
+    if (!ws) return;
 
-  // Match the shape SensESP's own subscribe_listeners() sends: a
-  // vessels.self context and a subscribe array of {path, period}. With
-  // sendMeta=all (a connection-level flag), one subscription delivers
-  // both value and meta deltas, so this reuses the same period the
-  // SubjectRegistry creates its listeners with (1000 ms).
-  constexpr int kListenDelayMs = 1000;
-  JsonDocument doc;
-  JsonObject root = doc.to<JsonObject>();
-  root["context"] = "vessels.self";
-  JsonArray subscribe = root["subscribe"].to<JsonArray>();
-  for (const auto& p : paths) {
-    JsonObject entry = subscribe.add<JsonObject>();
-    entry["path"] = p;
-    entry["period"] = kListenDelayMs;
-  }
+    // Match the shape SensESP's own subscribe_listeners() sends: a
+    // vessels.self context and a subscribe array of {path, period}. With
+    // sendMeta=all (a connection-level flag) one subscription delivers
+    // both value and meta deltas; reuse the 1000 ms period the
+    // SubjectRegistry creates its listeners with.
+    constexpr int kListenDelayMs = 1000;
+    JsonDocument doc;
+    JsonObject root = doc.to<JsonObject>();
+    root["context"] = "vessels.self";
+    JsonArray subscribe = root["subscribe"].to<JsonArray>();
+    for (const auto& p : paths) {
+      JsonObject entry = subscribe.add<JsonObject>();
+      entry["path"] = p;
+      entry["period"] = kListenDelayMs;
+    }
 
-  String s;
-  serializeJson(doc, s);
-  ESP_LOGI(TAG, "incremental subscribe for %u new path(s)",
-           (unsigned)paths.size());
-  ws->sendTXT(s);
+    String s;
+    serializeJson(doc, s);
+    ESP_LOGI(TAG, "incremental subscribe for %u new path(s)",
+             (unsigned)paths.size());
+    ws->sendTXT(s);
+  });
 }
 
 }  // namespace jlp
