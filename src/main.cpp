@@ -22,6 +22,7 @@
 #else
 #include "sensesp_cockpit_display/hal/boards/waveshare_7b.h"
 #endif
+#include "sensesp_cockpit_display/hal/boards/waveshare_audio.h"
 #include "sensesp_cockpit_display/lvgl/lv_drivers.h"
 #include "sensesp_cockpit_display/net/http_ota.h"
 #include "sensesp_cockpit_display/net/remote_log.h"
@@ -46,6 +47,7 @@
 #include "jlp/status_overlay.h"
 #include "jlp/subject_registry.h"
 #include "jlp/alert_overlay.h"
+#include "jlp/audio/chime.h"
 #include "jlp/notifications_registry.h"
 #include "jlp/sun_state.h"
 #include "jlp/wake_overlay.h"
@@ -72,6 +74,14 @@ void setup() {
   auto* touch = new Waveshare7BTouch();
 #endif
   lvgl_init(display, touch);
+
+  // Panel speaker (ES8311 + NS4150B). Same hardware on 7B and 4B, so
+  // this is board-agnostic. Drives the alert chime; the AudioDriver
+  // sink is also the intended path for a future voice feed.
+  auto* audio = new WaveshareAudio();
+  audio->init();
+  jlp::chime().init(audio);
+
   jlp::overlay().init();
   jlp::overlay().set_hostname("p4-cockpit");
 

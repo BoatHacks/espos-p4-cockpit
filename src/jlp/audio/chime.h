@@ -1,0 +1,42 @@
+#pragma once
+
+#include "sensesp_cockpit_display/hal/audio_driver.h"
+
+#include "../notifications_registry.h"
+
+namespace jlp {
+
+/// Synthesises short alert tones and plays them through the panel's
+/// audio driver. Severity-shaped: a warn is a single soft beep, an
+/// alarm an urgent double, an emergency a fast triple. No assets — the
+/// PCM is generated on the fly, so this costs no flash beyond the code.
+///
+/// Process-lifetime singleton (like the alert overlay). init() is
+/// called once at boot with the board's AudioDriver; play() is safe to
+/// call from the LVGL event_loop task because the driver's play_pcm()
+/// is non-blocking.
+class Chime {
+ public:
+  /// Wire in the board audio sink. Null is tolerated (a board without
+  /// a speaker) — play() then no-ops.
+  void init(sensesp_cockpit_display::AudioDriver* audio) { audio_ = audio; }
+
+  /// Play the tone for `state`. Nominal/normal are silent.
+  void play(NotState state);
+
+  /// True if a working audio sink is wired (for the /hello status +
+  /// /beep probe). False on a speaker-less board or a failed codec init.
+  bool audio_ready() const { return audio_ && audio_->ready(); }
+
+  /// Force an alarm-severity tone regardless of gating. Drives the
+  /// /beep diagnostic endpoint so audibility can be tested over HTTP
+  /// without waiting for a real notification.
+  void test() { play(NotState::Alarm); }
+
+ private:
+  sensesp_cockpit_display::AudioDriver* audio_ = nullptr;
+};
+
+Chime& chime();
+
+}  // namespace jlp

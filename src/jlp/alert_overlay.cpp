@@ -1,6 +1,7 @@
 #include "alert_overlay.h"
 
 #include "esp_log.h"
+#include "audio/chime.h"
 #include "net/sk_put.h"
 #include "notifications_registry.h"
 #include "zone_registry.h"  // color_for_state
@@ -104,7 +105,19 @@ void AlertOverlay::init() {
       },
       LV_EVENT_CLICKED, nullptr);
 
-  notifications().on_change([this]() { rebuild(); });
+  notifications().on_change([this]() {
+    // Sound BEFORE rebuild, and only on an escalation (a notification
+    // appeared or worsened) — never on a clear, ack, or message edit,
+    // so acking one alarm doesn't re-chime the next-most-severe. Gate
+    // on the same enabled_/min_state_ the overlay shows, so a muted or
+    // below-threshold notification stays silent. configure()'s rebuild
+    // (layout swaps) doesn't run through here, so swaps are silent too.
+    if (enabled_ && notifications().last_change_was_escalation()) {
+      const Notification* n = notifications().most_severe();
+      if (n && n->state >= min_state_) chime().play(n->state);
+    }
+    rebuild();
+  });
 
   ESP_LOGI(TAG, "alert overlay initialised");
 }

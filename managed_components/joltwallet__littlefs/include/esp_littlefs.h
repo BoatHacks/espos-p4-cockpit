@@ -23,10 +23,10 @@
 extern "C" {
 #endif
 
-#define ESP_LITTLEFS_VERSION_NUMBER "1.22.1"
+#define ESP_LITTLEFS_VERSION_NUMBER "1.22.2"
 #define ESP_LITTLEFS_VERSION_MAJOR 1
 #define ESP_LITTLEFS_VERSION_MINOR 22
-#define ESP_LITTLEFS_VERSION_PATCH 1
+#define ESP_LITTLEFS_VERSION_PATCH 2
 
 #ifdef ESP8266
 // ESP8266 RTOS SDK default enables VFS DIR support
@@ -57,10 +57,12 @@ typedef struct {
      *
      * `device_flags` on the handle are validated at mount:
      * - `encrypted` — mount fails (not supported).
-     * - `default_val_after_erase` — must be 1 (LittleFS expects 0xFF after erase).
      * - `erase_before_write` and `and_type_write` are used only to select block sizing mode:
      *   - classic mode (either flag set): `lfs` `block_size` uses geometry erase size.
-     *   - logical mode (both flags clear): `lfs` `block_size` uses lcm(read, prog).
+     *   - logical mode (both flags clear): `lfs` `block_size` uses lcm(read, prog),
+     *     raised to a multiple of it that meets the LittleFS 128-byte minimum.
+     * - `default_val_after_erase` — must be 1 in classic mode (LittleFS expects 0xFF after
+     *   erase); ignored in logical mode (overwrite-capable media may erase to any value).
      *
      * If the device provides `ops->release`, it is called when the filesystem is torn down
      * (e.g. `esp_vfs_littlefs_unregister_blockdev`).

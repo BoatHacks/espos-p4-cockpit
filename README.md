@@ -12,6 +12,7 @@ The UI is **runtime-loadable**: instead of rebuilding firmware per layout change
 - Two-way SignalK binding: widgets observe paths, taps emit SK PUTs (bool, int, float, string, notification ACK).
 - **Zone-color tinting** from SK path metadata (nominal / alert / warn / alarm / emergency), maritime-helm palette.
 - **Notifications subsystem** — subscribes to `notifications.*`, surfaces a full-screen alert overlay when any pending notification meets the configured `min_state`, ACK button PUTs the cleared state back as a delta.
+- **Audible alert chime** — the panel speaker (ES8311 codec + NS4150B amp) sounds a severity-shaped tone when a notification newly escalates past `min_state` (single beep for warn, urgent double for alarm, fast triple for emergency). Silent on ack/clear.
 - **Idle backlight dimmer** — configurable timeout + dim-to brightness per layout. Touch, an incoming notification, or a fresh push all wake the panel.
 - **Per-widget colors** — optional `bg_color` / `fg_color` overrides (zone state still wins for alarm cases).
 - **Configurable font size** on `label` / `value` widgets via `display.font_size`.
