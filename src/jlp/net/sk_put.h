@@ -17,6 +17,12 @@ void put_int(const std::string& path, int value);
 void put_float(const std::string& path, float value);
 void put_string(const std::string& path, const std::string& value);
 
+// PUT an explicit JSON null to `path`. SKPutRequest<T> is typed and
+// can't express null, so this sends the SK put envelope directly. Used
+// by button widgets whose value is null — e.g. raising an anchor by
+// clearing navigation.anchor.position.
+void put_null(const std::string& path);
+
 /** PUT a notification ACK to `notifications.<path_after_prefix>`.
  *  Sends the SK convention `{value: {state: "normal", method: [],
  *  message: ""}}`. Called by the alert overlay when the operator

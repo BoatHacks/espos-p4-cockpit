@@ -1129,6 +1129,7 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
 // asked).
 
 void put_json_value(const std::string& path, JsonVariantConst v) {
+  if (v.isNull())   { put_null(path);              return; }
   if (v.is<bool>()) { put_bool(path, v.as<bool>()); return; }
   if (v.is<int>())  { put_int(path,  v.as<int>());  return; }
   if (v.is<float>()){ put_float(path,v.as<float>());return; }
@@ -1137,7 +1138,7 @@ void put_json_value(const std::string& path, JsonVariantConst v) {
     if (s) put_string(path, s);
     return;
   }
-  // Unknown / null — silently skip rather than crash.
+  // Unknown non-null type — silently skip rather than crash.
 }
 
 struct ButtonCtx {

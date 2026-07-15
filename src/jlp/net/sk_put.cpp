@@ -7,6 +7,7 @@
 #include "sensesp.h"
 #include "sensesp/signalk/signalk_put_request.h"
 #include "sensesp/signalk/signalk_ws_client.h"
+#include "sensesp/system/uuid.h"
 #include "sensesp_app.h"
 
 static const char* TAG = "jlp.put";
@@ -56,6 +57,29 @@ void put_float(const std::string& path, float value) {
 void put_string(const std::string& path, const std::string& value) {
   ESP_LOGI(TAG, "PUT %s = \"%s\"", path.c_str(), value.c_str());
   get(g_string, path)->set(String(value.c_str()));
+}
+
+void put_null(const std::string& path) {
+  ESP_LOGI(TAG, "PUT %s = null", path.c_str());
+  auto app = sensesp::SensESPApp::get();
+  if (!app) return;
+  auto ws = app->get_ws_client();
+  if (!ws) return;
+
+  // Build the SK PUT envelope by hand (SKPutRequest<T> can't carry a
+  // null value): {"requestId":<uuid>,"put":{"path":<path>,"value":null}}.
+  // Fire-and-forget — we don't track the response; the server's action
+  // handler acts on the PUT regardless.
+  JsonDocument doc;
+  JsonObject root = doc.to<JsonObject>();
+  root["requestId"] = sensesp::generate_uuid4();
+  JsonObject put = root["put"].to<JsonObject>();
+  put["path"] = path;
+  put["value"] = nullptr;  // ArduinoJson v7 serialises this as JSON null
+
+  String s;
+  serializeJson(doc, s);
+  ws->sendTXT(s);
 }
 
 // ---- notification ACK ----
