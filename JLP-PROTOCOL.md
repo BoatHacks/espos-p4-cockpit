@@ -239,6 +239,17 @@ Displayed value = `(raw × scale) + offset`, formatted to `decimals`, then `unit
 - Renders a centered caption on a tinted tile. Press dims the tile to ~70% opacity for visual feedback; release restores opacity.
 - Touch-off-widget (press lost) cancels any pending hold and emits no release PUT.
 
+#### `anchor`
+- Anchor-watch dial: a compass rose with a needle pointing to the dropped anchor and a radius ring showing how close the boat is to the alarm limit.
+- Takes **no `bind`** — it owns a fixed SK path family published by an anchor-alarm plugin:
+  - `navigation.anchor.apparentBearing` (rad) — needle, boat-relative (0 = dead ahead, so up on the rose; clockwise = starboard). Needle hides when there's no value (no heading source).
+  - `navigation.anchor.currentRadius` / `navigation.anchor.maxRadius` (m) — the ring fills `current / max` and the centre shows `currentRadius`. Ring **colour** is by absolute margin to the limit: green when comfortably inside, yellow within 3 m of `maxRadius`, red once `currentRadius` exceeds `maxRadius` (dragging).
+  - `navigation.anchor.state` (`"on"` / `"off"`) — when not `"on"`, the dial dims, the needle hides, and the centre reads **ANCHOR UP**.
+- Extra fields:
+  - `display` (object, optional) — scales/units the centre distance text (defaults to metres, the SK unit).
+  - `bg_color`, `fg_color` (string, optional) — fixed colors (see Common widget fields).
+- The drag alarm itself is **not** part of this widget — it rides `notifications.navigation.anchor` and is handled by the notifications registry + alert overlay.
+
 ### Validation rules
 
 A layout MUST be rejected if any of the following holds:

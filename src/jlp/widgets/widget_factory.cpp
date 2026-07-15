@@ -1507,6 +1507,277 @@ lv_obj_t* build_notifications(BuildCtx& ctx, JsonObjectConst spec,
   return root;
 }
 
+// ---- anchor watch -------------------------------------------------------
+//
+// A compass rose with a needle pointing to the dropped anchor plus a
+// radius ring showing how close the boat is to the alarm limit. Binds
+// four navigation.anchor.* paths (all published by an anchor-alarm SK
+// plugin): apparentBearing (needle, boat-relative — up = anchor ahead),
+// currentRadius + maxRadius (ring fill + centre distance), and state
+// ("on"/"off"). The drag alarm itself rides notifications.navigation.
+// anchor, handled by the notifications registry + alert overlay, so it's
+// deliberately NOT part of this widget.
+//
+// Unlike the single-bind value widgets, this observes all four subjects;
+// each observer updates its slice of one shared AnchorCtx and re-renders
+// the composite from the last-known values.
+struct AnchorCtx {
+  lv_obj_t* needle;      // lv_line, recomputed from apparentBearing
+  lv_obj_t* ring;        // lv_arc, value = currentRadius / maxRadius
+  lv_obj_t* dist;        // centre distance label
+  lv_obj_t* caption;     // "of NN m" range / "ANCHOR UP"
+  lv_point_precise_t needle_pts[2];
+  float cx, cy, needle_len;
+  Disp dist_disp;        // display scaling for the centre distance text
+  // Last-known values; any observer redraws from these.
+  bool state_on = false;    // navigation.anchor.state == "on"
+  bool have_bearing = false;
+  float bearing_rad = 0.f;  // apparentBearing (0 = ahead), radians
+  float cur_m = 0.f;
+  float max_m = 0.f;
+};
+
+// Anchored if the plugin says state="on", OR we have a positive maxRadius.
+// The state string only arrives over the WS (on drop + a slow periodic
+// re-broadcast) and is skipped by the REST value seed, whereas maxRadius
+// is a float the seed delivers and the plugin nulls on raise — so keying
+// off it too lets the dial come alive from the cold-start fetch instead
+// of waiting for the next state delta.
+static bool anchor_is_watching(const AnchorCtx* a) {
+  return a->state_on || a->max_m > 0.f;
+}
+
+// Warn margin (m): yellow once the boat is within this of the limit.
+static constexpr float kAnchorWarnMarginM = 3.0f;
+
+// Ring colour by absolute margin to the alarm limit, not a ratio — a
+// fixed safety margin is what matters at anchor (3 m of slack means the
+// same whether the rode is 20 m or 60 m):
+//   red    — past the limit (currentRadius > maxRadius): dragging.
+//   yellow — within kAnchorWarnMarginM of the limit but still inside.
+//   green  — comfortably inside.
+static uint32_t anchor_ring_color(float cur_m, float max_m) {
+  if (cur_m > max_m) return 0xf85149;                        // red
+  if (max_m - cur_m <= kAnchorWarnMarginM) return 0xd29922;  // yellow
+  return 0x3fb950;                                           // green
+}
+
+static void anchor_render(AnchorCtx* a) {
+  if (!anchor_is_watching(a)) {
+    // Anchor up / no watch: dim everything, hide the needle, show a
+    // placeholder instead of a stale bearing + distance.
+    lv_obj_add_flag(a->needle, LV_OBJ_FLAG_HIDDEN);
+    lv_arc_set_value(a->ring, 0);
+    lv_obj_set_style_arc_color(a->ring, lv_color_hex(kMutedHex),
+                               LV_PART_INDICATOR);
+    // ASCII dash, not an em-dash: the compiled Montserrat glyph set
+    // doesn't carry U+2014, so "—" renders as a tofu box on-device.
+    lv_label_set_text(a->dist, "--");
+    lv_label_set_text(a->caption, "ANCHOR UP");
+    return;
+  }
+
+  // Ring FILL is still the fraction of the limit (0..1, clamped) — a
+  // visual "how far out of my scope am I". COLOUR is by absolute margin
+  // (see anchor_ring_color). max=0 guards a divide-by-zero.
+  float frac = (a->max_m > 0.f) ? (a->cur_m / a->max_m) : 0.f;
+  if (frac < 0.f) frac = 0.f;
+  if (frac > 1.f) frac = 1.f;
+  lv_arc_set_value(a->ring, (int32_t)(frac * kBarSteps));
+  lv_obj_set_style_arc_color(a->ring,
+                             lv_color_hex(anchor_ring_color(a->cur_m, a->max_m)),
+                             LV_PART_INDICATOR);
+
+  // Centre distance (currentRadius) in display units.
+  float dv = a->cur_m * a->dist_disp.scale + a->dist_disp.offset;
+  lv_label_set_text_fmt(a->dist, "%.*f", a->dist_disp.decimals, dv);
+  if (a->max_m > 0.f) {
+    float mv = a->max_m * a->dist_disp.scale + a->dist_disp.offset;
+    lv_label_set_text_fmt(a->caption, "of %.*f %s", a->dist_disp.decimals, mv,
+                          a->dist_disp.unit);
+  } else {
+    lv_label_set_text(a->caption, a->dist_disp.unit);
+  }
+
+  // Needle: apparentBearing is boat-relative with 0 = dead ahead, so up
+  // on the rose. Screen angle 0 points +x (right); rotate by -90° so 0
+  // rad points up, then add the bearing (clockwise = starboard).
+  if (a->have_bearing) {
+    float scr = a->bearing_rad - (float)M_PI / 2.f;
+    a->needle_pts[0].x = (lv_value_precise_t)a->cx;
+    a->needle_pts[0].y = (lv_value_precise_t)a->cy;
+    a->needle_pts[1].x =
+        (lv_value_precise_t)(a->cx + a->needle_len * cosf(scr));
+    a->needle_pts[1].y =
+        (lv_value_precise_t)(a->cy + a->needle_len * sinf(scr));
+    lv_line_set_points(a->needle, a->needle_pts, 2);
+    lv_obj_clear_flag(a->needle, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    // Anchored but no heading to reference apparentBearing against.
+    lv_obj_add_flag(a->needle, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+lv_obj_t* build_anchor(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
+  // Fixed path family — the widget owns its bindings rather than taking a
+  // single `bind`, since it needs the whole navigation.anchor.* set.
+  const char* kStatePath = "navigation.anchor.state";
+  const char* kBearingPath = "navigation.anchor.apparentBearing";
+  const char* kCurPath = "navigation.anchor.currentRadius";
+  const char* kMaxPath = "navigation.anchor.maxRadius";
+
+  lv_subject_t* s_state = ctx.reg.get_or_create(kStatePath, SubjectKind::String);
+  lv_subject_t* s_brg = ctx.reg.get_or_create(kBearingPath, SubjectKind::Float);
+  lv_subject_t* s_cur = ctx.reg.get_or_create(kCurPath, SubjectKind::Float);
+  lv_subject_t* s_max = ctx.reg.get_or_create(kMaxPath, SubjectKind::Float);
+  if (!s_state || !s_brg || !s_cur || !s_max) {
+    *err = "anchor: subject kind conflict on navigation.anchor.*";
+    return nullptr;
+  }
+  ctx.live_paths.insert(kStatePath);
+  ctx.live_paths.insert(kBearingPath);
+  ctx.live_paths.insert(kCurPath);
+  ctx.live_paths.insert(kMaxPath);
+
+  const Colors colors = parse_colors(spec);
+  lv_obj_t* root = lv_obj_create(ctx.parent);
+  apply_geometry(root, spec);
+  lv_obj_set_style_bg_opa(root, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_border_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_outline_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_shadow_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(root, 0, LV_PART_MAIN);
+  lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
+
+  int box_w = spec["w"] | 140;
+  int box_h = spec["h"] | 140;
+  int side = box_w < box_h ? box_w : box_h;
+  float cx = box_w / 2.0f;
+  float cy = box_h / 2.0f;
+
+  // Full-circle rose backdrop (thin muted ring) — a plain bg arc.
+  lv_obj_t* rose = lv_arc_create(root);
+  lv_obj_set_size(rose, side, side);
+  lv_obj_align(rose, LV_ALIGN_CENTER, 0, 0);
+  lv_arc_set_bg_angles(rose, 0, 360);
+  lv_arc_set_angles(rose, 0, 0);
+  lv_obj_remove_style(rose, NULL, LV_PART_KNOB);
+  lv_obj_clear_flag(rose, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_arc_color(rose, lv_color_hex(0x30363d), LV_PART_MAIN);
+  lv_obj_set_style_arc_width(rose, 2, LV_PART_MAIN);
+
+  // Radius ring: a 270° arc (gap at the bottom) whose indicator fills
+  // with the current/max fraction. Sits just inside the rose.
+  lv_obj_t* ring = lv_arc_create(root);
+  int ring_side = side - side / 8;
+  lv_obj_set_size(ring, ring_side, ring_side);
+  lv_obj_align(ring, LV_ALIGN_CENTER, 0, 0);
+  lv_arc_set_range(ring, 0, kBarSteps);
+  lv_arc_set_bg_angles(ring, 135, 45);
+  lv_arc_set_angles(ring, 135, 135);
+  lv_obj_remove_style(ring, NULL, LV_PART_KNOB);
+  lv_obj_clear_flag(ring, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_arc_color(ring, lv_color_hex(0x30363d), LV_PART_MAIN);
+  lv_obj_set_style_arc_width(ring, side / 14, LV_PART_MAIN);
+  lv_obj_set_style_arc_width(ring, side / 14, LV_PART_INDICATOR);
+
+  // Needle — an lv_line from centre outward. lv_line stores the points
+  // pointer (doesn't copy), so the backing buffer lives in AnchorCtx.
+  lv_obj_t* needle = lv_line_create(root);
+  lv_obj_set_style_line_color(needle, lv_color_hex(colors.fg), LV_PART_MAIN);
+  lv_obj_set_style_line_width(needle, 3, LV_PART_MAIN);
+  lv_obj_set_style_line_rounded(needle, true, LV_PART_MAIN);
+
+  // Centre distance + caption.
+  lv_obj_t* dist = lv_label_create(root);
+  lv_obj_set_style_text_color(dist, lv_color_hex(colors.fg), LV_PART_MAIN);
+  lv_obj_set_style_text_font(dist, &lv_font_montserrat_28, LV_PART_MAIN);
+  lv_label_set_text(dist, "--");  // ASCII: U+2014 em-dash tofus on-device
+  lv_obj_align(dist, LV_ALIGN_CENTER, 0, -4);
+
+  lv_obj_t* caption = lv_label_create(root);
+  lv_obj_set_style_text_color(caption, lv_color_hex(kMutedHex), LV_PART_MAIN);
+  lv_obj_set_style_text_font(caption, &lv_font_montserrat_14, LV_PART_MAIN);
+  lv_label_set_text(caption, "ANCHOR UP");
+  lv_obj_align_to(caption, dist, LV_ALIGN_OUT_BOTTOM_MID, 0, 2);
+
+  auto* a = new AnchorCtx{};
+  a->needle = needle;
+  a->ring = ring;
+  a->dist = dist;
+  a->caption = caption;
+  a->cx = cx;
+  a->cy = cy;
+  a->needle_len = ring_side / 2.0f - side / 14.0f - 4.0f;
+  a->dist_disp = parse_display(spec);
+  // The centre text is currentRadius; if the layout gave no display
+  // unit, default to metres (the SK unit for the radius paths).
+  if (a->dist_disp.unit[0] == '\0') {
+    snprintf(a->dist_disp.unit, sizeof(a->dist_disp.unit), "m");
+  }
+
+  // Ownership: root frees the AnchorCtx on delete; the four observers
+  // are auto-removed by LVGL when their target object (root) is deleted.
+  lv_obj_set_user_data(root, a);
+  lv_obj_add_event_cb(
+      root,
+      [](lv_event_t* e) {
+        delete static_cast<AnchorCtx*>(lv_obj_get_user_data(
+            static_cast<lv_obj_t*>(lv_event_get_target(e))));
+      },
+      LV_EVENT_DELETE, nullptr);
+
+  // state: "on"/"off" → anchored flag.
+  lv_subject_add_observer_obj(
+      s_state,
+      [](lv_observer_t* obs, lv_subject_t* s) {
+        auto* w = lv_observer_get_target_obj(obs);
+        auto* a = static_cast<AnchorCtx*>(lv_obj_get_user_data(w));
+        const char* v = static_cast<const char*>(lv_subject_get_pointer(s));
+        a->state_on = v && strcasecmp(v, "on") == 0;
+        anchor_render(a);
+      },
+      root, nullptr);
+
+  // apparentBearing (rad). SK sends null when there's no heading; the
+  // listener leaves the subject at 0 in that case, indistinguishable
+  // from "dead ahead" — acceptable, the needle just points up. Treat
+  // any received float as a valid bearing.
+  lv_subject_add_observer_obj(
+      s_brg,
+      [](lv_observer_t* obs, lv_subject_t* s) {
+        auto* w = lv_observer_get_target_obj(obs);
+        auto* a = static_cast<AnchorCtx*>(lv_obj_get_user_data(w));
+        a->bearing_rad = lv_subject_get_float(s);
+        a->have_bearing = true;
+        anchor_render(a);
+      },
+      root, nullptr);
+
+  lv_subject_add_observer_obj(
+      s_cur,
+      [](lv_observer_t* obs, lv_subject_t* s) {
+        auto* w = lv_observer_get_target_obj(obs);
+        auto* a = static_cast<AnchorCtx*>(lv_obj_get_user_data(w));
+        a->cur_m = lv_subject_get_float(s);
+        anchor_render(a);
+      },
+      root, nullptr);
+
+  lv_subject_add_observer_obj(
+      s_max,
+      [](lv_observer_t* obs, lv_subject_t* s) {
+        auto* w = lv_observer_get_target_obj(obs);
+        auto* a = static_cast<AnchorCtx*>(lv_obj_get_user_data(w));
+        a->max_m = lv_subject_get_float(s);
+        anchor_render(a);
+      },
+      root, nullptr);
+
+  anchor_render(a);  // initial (idle) paint
+  return root;
+}
+
 }  // namespace
 
 lv_obj_t* build_widget(BuildCtx& ctx, JsonObjectConst spec,
@@ -1522,6 +1793,7 @@ lv_obj_t* build_widget(BuildCtx& ctx, JsonObjectConst spec,
   if (t == "bargroup") return build_bargroup(ctx, spec, err);
   if (t == "button")   return build_button(ctx, spec, err);
   if (t == "notifications") return build_notifications(ctx, spec, err);
+  if (t == "anchor")   return build_anchor(ctx, spec, err);
   *err = std::string("unknown widget kind: ") + t;
   return nullptr;
 }
