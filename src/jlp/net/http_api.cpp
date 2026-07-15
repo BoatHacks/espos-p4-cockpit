@@ -20,6 +20,7 @@
 
 #include "../layout/layout_manager.h"
 #include "../layout/store.h"
+#include "../audio/chime.h"
 
 static const char* TAG = "jlp.http";
 
@@ -111,6 +112,19 @@ esp_err_t layout_post(httpd_req_t* req) {
 esp_err_t healthz_get(httpd_req_t* req) {
   httpd_resp_set_type(req, "application/json");
   httpd_resp_sendstr(req, "{\"ok\":true}");
+  return ESP_OK;
+}
+
+// GET /beep — fire a test chime so audibility can be checked over HTTP
+// without waiting for a real alarm. Reports whether the audio sink is
+// actually up so a silent result is diagnosable (init failure vs.
+// speaker/volume). play_pcm is non-blocking, so this returns at once.
+esp_err_t beep_get(httpd_req_t* req) {
+  bool ready = chime().audio_ready();
+  if (ready) chime().test();
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_sendstr(req, ready ? "{\"ok\":true,\"audio\":\"ready\"}"
+                                : "{\"ok\":false,\"audio\":\"not-ready\"}");
   return ESP_OK;
 }
 
@@ -461,6 +475,7 @@ esp_err_t hello_get(httpd_req_t* req) {
   resp["screenshot"]["formats"] = serialized("[\"jpeg\",\"bmp\"]");
   resp["active_layout_name"] = name;
   resp["layout_source"] = src_str;
+  resp["audio"] = chime().audio_ready() ? "ready" : "unavailable";
   std::string out;
   serializeJson(resp, out);
   httpd_resp_sendstr(req, out.c_str());
@@ -516,6 +531,14 @@ void http_api_start(uint16_t port) {
       .user_ctx = nullptr,
   };
   httpd_register_uri_handler(server, &screenshot_uri);
+
+  httpd_uri_t beep_uri = {
+      .uri = "/beep",
+      .method = HTTP_GET,
+      .handler = beep_get,
+      .user_ctx = nullptr,
+  };
+  httpd_register_uri_handler(server, &beep_uri);
 
   ESP_LOGI(
       TAG,

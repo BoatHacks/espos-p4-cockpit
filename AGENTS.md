@@ -205,6 +205,7 @@ designer refuses to push widget kinds the device doesn't advertise.
 | `remote_log` (2323)| no           | TCP log forwarder |
 | `esp_timer` 1 ms  | no            | `lv_tick_inc(1)` only — lock-free |
 | SK WS task        | no            | Receives raw deltas onto a queue; `process_received_updates` drains + dispatches to listeners on the event_loop task |
+| `audio` task      | no            | Drains the chime clip queue; blocking I2S write to the ES8311. `WaveshareAudio::play_pcm` (called from event_loop) copies + enqueues, never blocks |
 
 ## Repo conventions
 
@@ -232,5 +233,6 @@ designer refuses to push widget kinds the device doesn't advertise.
 - Text-input + canned-reply pills.
 - List widget v2: vessels.\* iterator for AIS.
 - Alert overlay `ack_method: "toast"`.
-- Sound on alert.
 - LVGL-WASM pixel-perfect preview.
+- Voice/AI widget over the audio sink (the `AudioDriver::play_pcm`
+  path exists; the TTS/mic feed does not).
