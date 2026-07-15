@@ -24,3 +24,7 @@ dependencies:
   # but it's small enough for our 1-2 fps poll budget).
   espressif/esp_new_jpeg:
     version: "^1.0.0"
+  # ES8311 codec + NS4150B amp driver for the panel's speaker. Drives
+  # the alert chime (WaveshareAudio HAL in sensesp-cockpit-display).
+  espressif/esp_codec_dev:
+    version: "^1.3.1"

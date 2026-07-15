@@ -67,6 +67,8 @@
 #endif
 #endif
 
+#define LFS_MIN_BLOCK_SIZE 128 /* Enforced by LFS_ASSERT in lfs_init */
+
 /**
  * @brief littlefs DIR structure
  */
@@ -1160,12 +1162,6 @@ static esp_err_t esp_littlefs_init_blockdev(esp_littlefs_t** efs, esp_blockdev_h
         return ESP_ERR_NOT_SUPPORTED;
     }
 
-    /* LittleFS assumes erased storage reads as 0xFF (all bits 1). */
-    if (!f->default_val_after_erase) {
-        ESP_LOGE(ESP_LITTLEFS_TAG, "BDL requires default_val_after_erase=1 (0xFF erased state)");
-        return ESP_ERR_NOT_SUPPORTED;
-    }
-
     /*
      * Use BDL flags only to determine effective LittleFS block sizing mode:
      * - classic: any erase-dependent/program-constrained medium
@@ -1173,6 +1169,20 @@ static esp_err_t esp_littlefs_init_blockdev(esp_littlefs_t** efs, esp_blockdev_h
      */
     const bool classic = f->erase_before_write || f->and_type_write;
     const bool logical = !classic;
+
+    /*
+     * Classic mode packs several commits into a single (large) erase block and relies on
+     * erased storage reading back as 0xFF (all bits 1) to find the end of the log and to
+     * append without re-erasing. Logical-mode media are overwrite-capable (no
+     * erase-before-write, no AND-type writes), so LittleFS can program any region
+     * regardless of its current content, and unprogrammed regions are rejected by commit
+     * CRCs — the erased byte value is irrelevant (this matches the native SD/eMMC path,
+     * which may erase to 0x00).
+     */
+    if (classic && !f->default_val_after_erase) {
+        ESP_LOGE(ESP_LITTLEFS_TAG, "Classic-mode BDL requires default_val_after_erase=1 (0xFF erased state)");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
 
     if (!read_only && blockdev->device_flags.read_only) {
         ESP_LOGE(ESP_LITTLEFS_TAG, "Refusing to mount read-only block dev for write");
@@ -1231,10 +1241,14 @@ static esp_err_t esp_littlefs_init_blockdev(esp_littlefs_t** efs, esp_blockdev_h
     } else {
         /* Logical block size: lcm(read, prog); ignore huge physical erase_size for LFS block boundaries. */
         erase_size = lcm_size(read_size, write_size);
+        if (erase_size > 0 && erase_size < LFS_MIN_BLOCK_SIZE) {
+            /* Overwrite-capable media accept any multiple of lcm(read, prog) as block size. */
+            erase_size *= (LFS_MIN_BLOCK_SIZE + erase_size - 1) / erase_size;
+        }
         if (erase_size == 0 || (g->disk_size % erase_size) != 0) {
             ESP_LOGE(ESP_LITTLEFS_TAG,
-                     "Logical BDL: disk_size (%" PRIu64 ") must be a non-zero multiple of lcm(read_size=%u, prog_size=%u) (%u)",
-                     (uint64_t)g->disk_size, (unsigned)read_size, (unsigned)write_size, (unsigned)erase_size);
+                     "Logical BDL: disk_size (%" PRIu64 ") must be a non-zero multiple of the logical block size (%u) derived from lcm(read_size=%u, prog_size=%u)",
+                     (uint64_t)g->disk_size, (unsigned)erase_size, (unsigned)read_size, (unsigned)write_size);
             return ESP_ERR_INVALID_ARG;
         }
     }
@@ -1248,6 +1262,12 @@ static esp_err_t esp_littlefs_init_blockdev(esp_littlefs_t** efs, esp_blockdev_h
     if (erase_size % read_size != 0 || erase_size % write_size != 0) {
         ESP_LOGE(ESP_LITTLEFS_TAG, "block_size (%u) must be a multiple of read_size (%u) and prog_size (%u)",
                  (unsigned)erase_size, (unsigned)read_size, (unsigned)write_size);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (erase_size < LFS_MIN_BLOCK_SIZE) {
+        ESP_LOGE(ESP_LITTLEFS_TAG, "block_size (%u) must be at least %u",
+                 (unsigned)erase_size, (unsigned)LFS_MIN_BLOCK_SIZE);
         return ESP_ERR_INVALID_ARG;
     }
 

@@ -447,6 +447,14 @@ TEST_CASE("bdl flag compatibility validation", "[littlefs_bdl_geom]")
     p.default_val_after_erase = false;
     assert_mock_bdl_register_result(&p, false, ESP_ERR_NOT_SUPPORTED);
 
+    /* logical mode does not require a 0xFF erased state (e.g. SD cards erasing to 0x00) */
+    p = mock_bdl_default_params();
+    p.erase_before_write = false;
+    p.and_type_write = false;
+    p.default_val_after_erase = false;
+    p.strict_erase_alignment = false;
+    assert_mock_bdl_register_result(&p, false, ESP_OK);
+
     p = mock_bdl_default_params();
     p.and_type_write = false;
     assert_mock_bdl_register_result(&p, false, ESP_OK);
@@ -478,9 +486,13 @@ TEST_CASE("bdl basic geometry rejection matrix", "[littlefs_bdl_geom]")
     p.erase_before_write = false;
     p.and_type_write = false;
     p.read_size = 16;
-    p.write_size = 48; /* lcm = 48 */
+    p.write_size = 48; /* lcm = 48, raised to 144 for the LittleFS minimum */
     p.disk_size = (48 * 10) - 1;
     p.strict_erase_alignment = false;
+    assert_mock_bdl_register_result(&p, false, ESP_ERR_INVALID_ARG);
+
+    p = mock_bdl_default_params();
+    p.erase_size = 64; /* classic block_size below the LittleFS 128-byte minimum */
     assert_mock_bdl_register_result(&p, false, ESP_ERR_INVALID_ARG);
 }
 
