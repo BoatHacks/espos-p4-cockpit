@@ -1584,8 +1584,13 @@ static void anchor_render(AnchorCtx* a) {
   if (frac < 0.f) frac = 0.f;
   if (frac > 1.f) frac = 1.f;
   lv_arc_set_value(a->ring, (int32_t)(frac * kBarSteps));
-  lv_obj_set_style_arc_color(a->ring,
-                             lv_color_hex(anchor_ring_color(a->cur_m, a->max_m)),
+  // Until a positive maxRadius arrives the margin is undefined — keep the
+  // ring muted rather than flashing red/yellow off a 0 limit. This can
+  // happen when state="on" lands before the maxRadius delta.
+  uint32_t ring_color = a->max_m > 0.f
+                            ? anchor_ring_color(a->cur_m, a->max_m)
+                            : kMutedHex;
+  lv_obj_set_style_arc_color(a->ring, lv_color_hex(ring_color),
                              LV_PART_INDICATOR);
 
   // Centre distance (currentRadius) in display units.
@@ -1739,10 +1744,15 @@ lv_obj_t* build_anchor(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
       },
       root, nullptr);
 
-  // apparentBearing (rad). SK sends null when there's no heading; the
-  // listener leaves the subject at 0 in that case, indistinguishable
-  // from "dead ahead" — acceptable, the needle just points up. Treat
-  // any received float as a valid bearing.
+  // apparentBearing (rad). The plugin sends null when there's no heading
+  // to reference it against; SensESP's value listener drops nulls, so the
+  // subject simply retains its last value. KNOWN LIMITATION: if a heading
+  // source drops mid-watch, the needle keeps pointing at the last good
+  // bearing rather than hiding — distinguishing that would need a
+  // separate availability subject threaded through the listener. The
+  // impact is cosmetic (the ring + distance stay correct, and the needle
+  // hides entirely once the anchor is raised); deferred over that
+  // plumbing.
   lv_subject_add_observer_obj(
       s_brg,
       [](lv_observer_t* obs, lv_subject_t* s) {

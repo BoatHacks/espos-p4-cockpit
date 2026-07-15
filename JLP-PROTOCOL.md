@@ -244,7 +244,7 @@ Displayed value = `(raw × scale) + offset`, formatted to `decimals`, then `unit
 - Takes **no `bind`** — it owns a fixed SK path family published by an anchor-alarm plugin:
   - `navigation.anchor.apparentBearing` (rad) — needle, boat-relative (0 = dead ahead, so up on the rose; clockwise = starboard). Needle hides when there's no value (no heading source).
   - `navigation.anchor.currentRadius` / `navigation.anchor.maxRadius` (m) — the ring fills `current / max` and the centre shows `currentRadius`. Ring **colour** is by absolute margin to the limit: green when comfortably inside, yellow within 3 m of `maxRadius`, red once `currentRadius` exceeds `maxRadius` (dragging).
-  - `navigation.anchor.state` (`"on"` / `"off"`) — when not `"on"`, the dial dims, the needle hides, and the centre reads **ANCHOR UP**.
+  - `navigation.anchor.state` (`"on"` / `"off"`) — anchoring is active when `state` is `"on"` **or** `maxRadius` is positive (so the dial comes alive from the REST cold-start seed, which doesn't carry the string `state`). When neither holds, the dial dims, the needle hides, and the centre reads **ANCHOR UP**.
 - Extra fields:
   - `display` (object, optional) — scales/units the centre distance text (defaults to metres, the SK unit).
   - `bg_color`, `fg_color` (string, optional) — fixed colors (see Common widget fields).
