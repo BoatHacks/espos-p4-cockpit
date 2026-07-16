@@ -36,9 +36,15 @@ class LayoutManager {
   // Fires after every successful apply + swap. `new_paths` is the set
   // of bound paths the new layout introduced that weren't already in
   // the previous one (or all paths on first apply).
+  // `src` and `all_paths` let the hook re-seed values on a boot apply
+  // (BootStore / BootFetched), where no paths are "new" but the quiet
+  // ones — e.g. navigation.anchor.maxRadius — still need backfilling
+  // because their delta was missed before the WS subscribed.
   using PostSwapHook =
       std::function<void(bool new_paths_introduced,
-                         const std::set<std::string>& new_paths)>;
+                         const std::set<std::string>& new_paths,
+                         ApplySource src,
+                         const std::set<std::string>& all_paths)>;
   void set_post_swap_hook(PostSwapHook h) { post_swap_ = std::move(h); }
 
   // Parses, validates, builds, and (on success) swaps in the new

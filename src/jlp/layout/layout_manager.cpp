@@ -404,7 +404,7 @@ ApplyResult LayoutManager::apply(const std::string& json, ApplySource src) {
   }
   bool new_paths = !introduced.empty();
   known_paths_ = live_paths;
-  if (post_swap_) post_swap_(new_paths, introduced);
+  if (post_swap_) post_swap_(new_paths, introduced, src, live_paths);
 
   r.ok = true;
   r.name = active_name_;
