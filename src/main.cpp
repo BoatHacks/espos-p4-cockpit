@@ -136,28 +136,41 @@ void setup() {
   // via REST and send an incremental WS subscribe so they stream live —
   // without a full ws->restart() and its multi-second reconnect storm.
   jlp::layout_manager().set_post_swap_hook(
-      [](bool new_paths_introduced,
-         const std::set<std::string>& new_paths) {
-        if (!new_paths_introduced) return;
-        // Pull SK meta (zones + description) for just the newly-
-        // introduced paths via HTTP REST. The per-path endpoint is
-        // ~25 ms per path on a healthy LAN; the fetch task drives
-        // them serially so the burst stays small.
-        std::vector<std::string> v(new_paths.begin(), new_paths.end());
+      [](bool new_paths_introduced, const std::set<std::string>& new_paths,
+         jlp::ApplySource src, const std::set<std::string>& all_paths) {
+        // On a boot apply (layout from store / applicationData) NO path
+        // is "new", but the quiet ones still need their current value
+        // pulled: SK only sends deltas on change, so a value that last
+        // changed before the WS subscribed (e.g. navigation.anchor.*
+        // when the anchor was dropped before boot) never arrives, and
+        // the widget sits at its initial 0 — the anchor dial reads
+        // "ANCHOR UP" though the anchor is down. Seed the whole set in
+        // that case. On a runtime push, keep seeding just the new paths.
+        const bool boot = src == jlp::ApplySource::BootStore ||
+                          src == jlp::ApplySource::BootFetched;
+        const std::set<std::string>& to_fetch = boot ? all_paths : new_paths;
+        if (to_fetch.empty()) return;
+
+        // Pull SK meta (zones + description) and current value for the
+        // target paths via HTTP REST. Per-path endpoint is ~25 ms on a
+        // healthy LAN; the fetch task drives them serially so the burst
+        // stays small.
+        std::vector<std::string> v(to_fetch.begin(), to_fetch.end());
         jlp::SkServer s = jlp::sk_server();
         jlp::zone_fetch_for_paths(s.host, s.port, v);
-        // The REST fetch above seeds each new path's *current* value so
-        // the widget shows something immediately. But SensESP only
-        // subscribes at WS connect, so a path first bound by a push made
-        // after connect would otherwise never receive live deltas — its
-        // widget would sit frozen at the seed. Send an incremental
-        // subscribe for just the new paths so they start streaming now.
+
+        // SensESP only subscribes at WS connect, so a path first bound
+        // by a push made after connect would otherwise never receive
+        // live deltas — its widget would sit frozen at the seed. Send an
+        // incremental subscribe for just the new paths so they start
+        // streaming now. (Boot paths are covered by the WS's own connect
+        // subscribe, so only new_paths need this.)
         //
         // This intentionally replaces a full ws->restart(): the restart's
         // reconnect burst floods event_loop with SK's initial-state
         // replay for 30+ seconds, wedging the next push / screenshot. An
         // incremental subscribe adds only the new paths, no replay storm.
-        jlp::subscribe_new_paths(new_paths);
+        if (new_paths_introduced) jlp::subscribe_new_paths(new_paths);
       });
 
   remote_log_start(2323);
@@ -207,6 +220,22 @@ void setup() {
             static bool s_boot_fetch_done = false;
             if (!s_boot_fetch_done) {
               s_boot_fetch_done = true;
+              // Seed the boot layout's values now that the server is
+              // resolved. The stored layout was applied before the
+              // network was up (and before the post-swap hook existed),
+              // so its seed never ran — a quiet path whose last delta
+              // predates this boot (e.g. navigation.anchor.maxRadius
+              // when the anchor was dropped before boot) would otherwise
+              // sit at 0 and the widget render stale ("ANCHOR UP"). The
+              // WS's own connect subscribe covers live streaming, so no
+              // extra subscribe is needed. A BootFetched applicationData
+              // apply, if it lands, seeds itself through the hook.
+              const auto& boot_paths = jlp::layout_manager().known_paths();
+              if (!boot_paths.empty()) {
+                std::vector<std::string> v(boot_paths.begin(),
+                                           boot_paths.end());
+                jlp::zone_fetch_for_paths(s.host, s.port, v);
+              }
               jlp::layout_fetch_async_apply(s.host, s.port);
             }
             break;
