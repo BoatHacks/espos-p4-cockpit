@@ -54,6 +54,11 @@ class LayoutManager {
   const std::string& active_name() const { return active_name_; }
   ApplySource active_source() const { return active_source_; }
 
+  // Paths bound by the currently-applied layout. Used by boot to seed
+  // the values of a layout that was applied (from the store) before the
+  // network — and thus before the post-swap hook — was ready.
+  const std::set<std::string>& known_paths() const { return known_paths_; }
+
  private:
   lv_obj_t* parent_ = nullptr;
   lv_obj_t* current_root_ = nullptr;

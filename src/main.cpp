@@ -220,6 +220,22 @@ void setup() {
             static bool s_boot_fetch_done = false;
             if (!s_boot_fetch_done) {
               s_boot_fetch_done = true;
+              // Seed the boot layout's values now that the server is
+              // resolved. The stored layout was applied before the
+              // network was up (and before the post-swap hook existed),
+              // so its seed never ran — a quiet path whose last delta
+              // predates this boot (e.g. navigation.anchor.maxRadius
+              // when the anchor was dropped before boot) would otherwise
+              // sit at 0 and the widget render stale ("ANCHOR UP"). The
+              // WS's own connect subscribe covers live streaming, so no
+              // extra subscribe is needed. A BootFetched applicationData
+              // apply, if it lands, seeds itself through the hook.
+              const auto& boot_paths = jlp::layout_manager().known_paths();
+              if (!boot_paths.empty()) {
+                std::vector<std::string> v(boot_paths.begin(),
+                                           boot_paths.end());
+                jlp::zone_fetch_for_paths(s.host, s.port, v);
+              }
               jlp::layout_fetch_async_apply(s.host, s.port);
             }
             break;
