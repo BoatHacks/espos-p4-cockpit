@@ -1823,10 +1823,13 @@ struct AnchorTrackCtx {
   lv_obj_t* chain;                       // chain-out (maxRadius) label on ring
   lv_obj_t* caption;                     // small "NN / MM m" readout / UP
   lv_obj_t* bands[kTrackBands];          // one lv_line per age band
-  // lv_line keeps the points POINTER (no copy), so each band's slice
-  // lives in band_pts (ring order). On redraw we linearise into `ordered`
-  // (a file-static scratch) and hand each band a contiguous slice.
+  // lv_line keeps the points POINTER (no copy), so both buffers must be
+  // PER-INSTANCE and outlive the widget: band_pts holds the samples in
+  // ring order; `ordered` is the temporal-order layout each band's line
+  // points into. A shared static buffer would let one widget's redraw
+  // corrupt another's live line data.
   lv_point_precise_t band_pts[kTrackMax];
+  lv_point_precise_t ordered[kTrackMax];
   int head = 0;                          // ring write index
   int count = 0;                         // valid points (<= kTrackMax)
   float cx, cy, plot_r, boat_r;          // centre, max plot radius, dot size
@@ -1864,17 +1867,16 @@ static void anchor_track_redraw(AnchorTrackCtx* a) {
   }
   int n = a->count;
   int start = (a->head - n + kTrackMax) % kTrackMax;
-  static lv_point_precise_t ordered[kTrackMax];
   for (int i = 0; i < n; ++i)
-    ordered[i] = a->band_pts[(start + i) % kTrackMax];
+    a->ordered[i] = a->band_pts[(start + i) % kTrackMax];
 
   for (int b = 0; b < kTrackBands; ++b) {
     int lo = (int)((long)b * n / kTrackBands);
     int hi = (int)((long)(b + 1) * n / kTrackBands);
-    if (b > 0) lo -= 1;                  // overlap for a continuous line
+    if (lo > 0) lo -= 1;                  // overlap for continuity (never < 0)
     int len = hi - lo;
     if (len < 2) { lv_obj_add_flag(a->bands[b], LV_OBJ_FLAG_HIDDEN); continue; }
-    lv_line_set_points(a->bands[b], &ordered[lo], len);
+    lv_line_set_points(a->bands[b], &a->ordered[lo], len);
     lv_opa_t opa = (lv_opa_t)(LV_OPA_20 +
                               (LV_OPA_COVER - LV_OPA_20) * b / (kTrackBands - 1));
     lv_obj_set_style_line_opa(a->bands[b], opa, LV_PART_MAIN);
