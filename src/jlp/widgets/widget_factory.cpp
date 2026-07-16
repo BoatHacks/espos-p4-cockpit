@@ -1171,15 +1171,21 @@ lv_obj_t* build_button(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   // Snapshot press/release values as JSON tokens so we can re-emit
   // them via the typed put_* helpers later. ArduinoJson's
   // serializeJson handles primitives + strings without quoting needs.
+  //
+  // A present-but-null value (e.g. RAISE = PUT null to raise the anchor)
+  // must be captured as the literal token "null" — NOT skipped. isNull()
+  // is true for both a missing key and an explicit JSON null, so we key
+  // off whether the field is present: absent -> no PUT; null -> PUT null;
+  // otherwise serialize the value. (button_fire treats an empty string
+  // as "no PUT", so serialising null to "null" is what routes it through
+  // put_json_value -> put_null.)
   std::string press_json;
   std::string release_json;
-  JsonVariantConst pv = spec["press_value"];
-  if (!pv.isNull()) {
-    serializeJson(pv, press_json);
+  if (spec["press_value"].is<JsonVariantConst>()) {
+    serializeJson(spec["press_value"], press_json);  // null -> "null"
   }
-  JsonVariantConst rv = spec["release_value"];
-  if (!rv.isNull()) {
-    serializeJson(rv, release_json);
+  if (spec["release_value"].is<JsonVariantConst>()) {
+    serializeJson(spec["release_value"], release_json);
   }
   uint32_t hold_ms = spec["hold_ms"] | 0;
 
