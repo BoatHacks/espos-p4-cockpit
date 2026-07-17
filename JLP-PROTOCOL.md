@@ -187,6 +187,7 @@ Displayed value = `(raw × scale) + offset`, formatted to `decimals`, then `unit
 - Renders a caption (`label`) on the left and an LVGL switch on the right.
 - Subject kind: `Int` (treats `0` as off, anything else as on).
 - Tap → emits a SignalK PUT to `bind` with the inverted value. The visual switches optimistically and reconciles against the SK echo (~500 ms timeout); if no echo arrives, the switch snaps back to the authoritative subscription value.
+- **Local action sentinel** `bind: "@audio_mute"` — instead of a SignalK path, the toggle becomes a **panel-local audio mute**. ON = muted: the alert chime is suppressed on this panel (current and future alarms) while alarms still show on the overlay; OFF re-arms sound. No PUT, no subscription — the state is local to this device. `label` defaults to "MUTE".
 
 #### `arc`
 - Extra fields:

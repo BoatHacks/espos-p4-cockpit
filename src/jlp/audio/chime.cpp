@@ -70,7 +70,7 @@ void pattern_for(NotState state, std::vector<Seg>& segs, float& amp) {
 }  // namespace
 
 void Chime::play(NotState state) {
-  if (!audio_ || !audio_->ready()) return;
+  if (muted_ || !audio_ || !audio_->ready()) return;
 
   std::vector<Seg> segs;
   float amp = 0.0f;

@@ -33,8 +33,15 @@ class Chime {
   /// without waiting for a real notification.
   void test() { play(NotState::Alarm); }
 
+  /// Panel-local standing mute. While muted, play() no-ops — the alert
+  /// overlay still shows alarms, but this panel stays silent (current
+  /// AND future) until un-muted. Local to this panel; doesn't touch SK.
+  void set_muted(bool m) { muted_ = m; }
+  bool muted() const { return muted_; }
+
  private:
   sensesp_cockpit_display::AudioDriver* audio_ = nullptr;
+  bool muted_ = false;
 };
 
 Chime& chime();
