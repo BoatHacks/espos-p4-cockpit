@@ -250,6 +250,15 @@ Displayed value = `(raw × scale) + offset`, formatted to `decimals`, then `unit
   - `bg_color`, `fg_color` (string, optional) — fixed colors (see Common widget fields).
 - The drag alarm itself is **not** part of this widget — it rides `notifications.navigation.anchor` and is handled by the notifications registry + alert overlay.
 
+#### `anchor_track`
+- Anchor-swing plot, **north up**: the anchor at centre, the watch-zone ring, and the boat's recent track around it (the "cycle" the anchor-alarm webapp shows). The frame is geographically fixed (north at top), so the swing reflects real wind/current shifts, not the boat's heading.
+- Takes **no `bind`** — it owns the same SK path family as `anchor`, but uses the **true** bearing:
+  - `navigation.anchor.bearingTrue` (rad, 0 = North) — plots each sample at the boat's compass position relative to the anchor.
+  - `navigation.anchor.currentRadius` / `navigation.anchor.maxRadius` (m) — `current / max` positions the boat relative to the fixed boundary circle (`maxRadius` = the circle). The boundary circle is **labelled with `maxRadius`** (chain out) and the boundary + boat dot colour follow the same drag-margin palette as `anchor` (green inside, yellow near the limit, red once `currentRadius` exceeds `maxRadius`).
+  - `navigation.anchor.state` — same `"on"` / `maxRadius > 0` gating as `anchor`; when idle the plot clears and the caption reads **ANCHOR UP**.
+- **Live tail only**: the track is built from samples received since the widget loaded (a rolling buffer, ~256 points), not the whole anchoring session (which would need the SK History API). The track **fades with age** — newest bright, oldest dim.
+- Extra fields: `display` (distance-text scaling), `fg_color` (track colour). Same as `anchor`.
+
 ### Validation rules
 
 A layout MUST be rejected if any of the following holds:

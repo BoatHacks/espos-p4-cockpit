@@ -1795,6 +1795,338 @@ lv_obj_t* build_anchor(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   return root;
 }
 
+// ---- anchor track -------------------------------------------------------
+//
+// NORTH-UP swing plot: anchor at centre, watch-zone ring, and the boat's
+// recent track around it — the "cycle" the anchor-alarm webapp shows.
+// North is up and the frame is geographically fixed (unlike the `anchor`
+// dial's boat-relative needle), so the swing pattern reflects real
+// wind/current shifts on the ground, not the boat's heading. Live tail:
+// every new currentRadius / bearingTrue sample appends a point at its
+// polar position (radius = fraction of maxRadius, angle = bearingTrue,
+// 0 = North). The track fades with age — newest bright, oldest dim — via
+// a few opacity-banded polylines.
+//
+// Live-only by design: shows the swing since the widget loaded, not the
+// whole session (that would need the SK History API). Binds
+// navigation.anchor.{state,bearingTrue,currentRadius,maxRadius}.
+
+// Fixed cap; a swing is slow, so a few hundred points cover a long tail.
+static constexpr int kTrackMax = 256;
+// Age bands: contiguous slices of the ordered buffer, each drawn as one
+// lv_line at a decreasing opacity so the track fades oldest -> newest.
+static constexpr int kTrackBands = 5;
+
+struct AnchorTrackCtx {
+  lv_obj_t* zone;                        // watch-zone boundary circle
+  lv_obj_t* boat;                        // current-position dot
+  lv_obj_t* chain;                       // chain-out (maxRadius) label on ring
+  lv_obj_t* caption;                     // small "NN / MM m" readout / UP
+  lv_obj_t* bands[kTrackBands];          // one lv_line per age band
+  // lv_line keeps the points POINTER (no copy), so both buffers must be
+  // PER-INSTANCE and outlive the widget: band_pts holds the samples in
+  // ring order; `ordered` is the temporal-order layout each band's line
+  // points into. A shared static buffer would let one widget's redraw
+  // corrupt another's live line data.
+  lv_point_precise_t band_pts[kTrackMax];
+  lv_point_precise_t ordered[kTrackMax];
+  int head = 0;                          // ring write index
+  int count = 0;                         // valid points (<= kTrackMax)
+  float cx, cy, plot_r, boat_r;          // centre, max plot radius, dot size
+  uint32_t track_hex;
+  Disp dist_disp;
+  bool state_on = false;
+  bool have_bearing = false;
+  float bearing_rad = 0.f;
+  float cur_m = 0.f;
+  float max_m = 0.f;
+};
+
+static bool anchor_track_watching(const AnchorTrackCtx* a) {
+  return a->state_on || a->max_m > 0.f;
+}
+
+// Boat-relative polar -> screen point, north up. bearingTrue 0 = North =
+// up, 90° = East = right, on a screen whose +y points down.
+static lv_point_precise_t anchor_track_xy(const AnchorTrackCtx* a, float frac) {
+  if (frac > 1.f) frac = 1.f;
+  float r = frac * a->plot_r;
+  lv_point_precise_t p;
+  p.x = (lv_value_precise_t)(a->cx + r * sinf(a->bearing_rad));
+  p.y = (lv_value_precise_t)(a->cy - r * cosf(a->bearing_rad));
+  return p;
+}
+
+// Rebuild the banded polylines from the ring buffer. Oldest points dim,
+// newest bright, so the track fades with age.
+static void anchor_track_redraw(AnchorTrackCtx* a) {
+  if (!anchor_track_watching(a) || a->count < 2) {
+    for (int b = 0; b < kTrackBands; ++b)
+      lv_obj_add_flag(a->bands[b], LV_OBJ_FLAG_HIDDEN);
+    return;
+  }
+  int n = a->count;
+  int start = (a->head - n + kTrackMax) % kTrackMax;
+  for (int i = 0; i < n; ++i)
+    a->ordered[i] = a->band_pts[(start + i) % kTrackMax];
+
+  for (int b = 0; b < kTrackBands; ++b) {
+    int lo = (int)((long)b * n / kTrackBands);
+    int hi = (int)((long)(b + 1) * n / kTrackBands);
+    if (lo > 0) lo -= 1;                  // overlap for continuity (never < 0)
+    int len = hi - lo;
+    if (len < 2) { lv_obj_add_flag(a->bands[b], LV_OBJ_FLAG_HIDDEN); continue; }
+    lv_line_set_points(a->bands[b], &a->ordered[lo], len);
+    lv_opa_t opa = (lv_opa_t)(LV_OPA_20 +
+                              (LV_OPA_COVER - LV_OPA_20) * b / (kTrackBands - 1));
+    lv_obj_set_style_line_opa(a->bands[b], opa, LV_PART_MAIN);
+    lv_obj_clear_flag(a->bands[b], LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+static void anchor_track_render(AnchorTrackCtx* a) {
+  if (!anchor_track_watching(a)) {
+    lv_obj_add_flag(a->boat, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(a->caption, "ANCHOR UP");
+    lv_label_set_text(a->chain, "");
+    lv_obj_set_style_border_color(a->zone, lv_color_hex(0x30363d), LV_PART_MAIN);
+    a->count = 0;  // reset the tail when the anchor comes up
+    anchor_track_redraw(a);
+    return;
+  }
+
+  // Boundary ring colour = drag margin (same palette as the boat dot and
+  // the anchor dial's ring): green comfortably inside, yellow within the
+  // warn margin, red once currentRadius exceeds maxRadius.
+  uint32_t margin_color = a->max_m > 0.f
+                              ? anchor_ring_color(a->cur_m, a->max_m)
+                              : 0x30363d;
+  lv_obj_set_style_border_color(a->zone, lv_color_hex(margin_color),
+                                LV_PART_MAIN);
+
+  // Chain-out label on the ring = maxRadius.
+  if (a->max_m > 0.f) {
+    float mv = a->max_m * a->dist_disp.scale + a->dist_disp.offset;
+    lv_label_set_text_fmt(a->chain, "%.*f %s", a->dist_disp.decimals, mv,
+                          a->dist_disp.unit);
+  } else {
+    lv_label_set_text(a->chain, "");
+  }
+
+  // Small readout at the bottom edge: current distance.
+  if (a->max_m > 0.f) {
+    float dv = a->cur_m * a->dist_disp.scale + a->dist_disp.offset;
+    lv_label_set_text_fmt(a->caption, "%.*f %s", a->dist_disp.decimals, dv,
+                          a->dist_disp.unit);
+  } else {
+    lv_label_set_text(a->caption, "");
+  }
+
+  // Current-position dot: placed at the boat's polar position, coloured
+  // by drag margin (same palette as the boundary ring).
+  if (a->have_bearing && a->max_m > 0.f) {
+    lv_point_precise_t p = anchor_track_xy(a, a->cur_m / a->max_m);
+    lv_obj_set_pos(a->boat, (int)(p.x - a->boat_r), (int)(p.y - a->boat_r));
+    lv_obj_set_style_bg_color(a->boat,
+                              lv_color_hex(anchor_ring_color(a->cur_m, a->max_m)),
+                              LV_PART_MAIN);
+    lv_obj_clear_flag(a->boat, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(a->boat, LV_OBJ_FLAG_HIDDEN);
+  }
+  anchor_track_redraw(a);
+}
+
+// Append the boat's current position as a track point (on a fresh
+// bearingTrue or currentRadius). Skips near-duplicate points so a boat
+// sitting still doesn't fill the buffer with one spot.
+static void anchor_track_push(AnchorTrackCtx* a) {
+  if (!anchor_track_watching(a) || !a->have_bearing || a->max_m <= 0.f) return;
+  lv_point_precise_t p = anchor_track_xy(a, a->cur_m / a->max_m);
+  if (a->count > 0) {
+    int last = (a->head - 1 + kTrackMax) % kTrackMax;
+    float dx = (float)(p.x - a->band_pts[last].x);
+    float dy = (float)(p.y - a->band_pts[last].y);
+    if (dx * dx + dy * dy < 4.0f) return;  // < 2 px moved: skip
+  }
+  a->band_pts[a->head] = p;
+  a->head = (a->head + 1) % kTrackMax;
+  if (a->count < kTrackMax) a->count++;
+}
+
+lv_obj_t* build_anchor_track(BuildCtx& ctx, JsonObjectConst spec,
+                             std::string* err) {
+  const char* kStatePath = "navigation.anchor.state";
+  const char* kBearingPath = "navigation.anchor.bearingTrue";
+  const char* kCurPath = "navigation.anchor.currentRadius";
+  const char* kMaxPath = "navigation.anchor.maxRadius";
+
+  lv_subject_t* s_state = ctx.reg.get_or_create(kStatePath, SubjectKind::String);
+  lv_subject_t* s_brg = ctx.reg.get_or_create(kBearingPath, SubjectKind::Float);
+  lv_subject_t* s_cur = ctx.reg.get_or_create(kCurPath, SubjectKind::Float);
+  lv_subject_t* s_max = ctx.reg.get_or_create(kMaxPath, SubjectKind::Float);
+  if (!s_state || !s_brg || !s_cur || !s_max) {
+    *err = "anchor_track: subject kind conflict on navigation.anchor.*";
+    return nullptr;
+  }
+  ctx.live_paths.insert(kStatePath);
+  ctx.live_paths.insert(kBearingPath);
+  ctx.live_paths.insert(kCurPath);
+  ctx.live_paths.insert(kMaxPath);
+
+  const Colors colors = parse_colors(spec);
+  lv_obj_t* root = lv_obj_create(ctx.parent);
+  apply_geometry(root, spec);
+  lv_obj_set_style_bg_opa(root, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_border_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_outline_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_shadow_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(root, 0, LV_PART_MAIN);
+  lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
+
+  int box_w = spec["w"] | 140;
+  int box_h = spec["h"] | 140;
+  int side = box_w < box_h ? box_w : box_h;
+  float cx = box_w / 2.0f;
+  float cy = box_h / 2.0f;
+
+  // Watch-zone boundary: a plain hollow circle (north up). frac 1.0 =
+  // maxRadius lands on this circle. A radar/map look, not a gauge dial.
+  int zone_side = side - side / 12;
+  lv_obj_t* zone = lv_obj_create(root);
+  lv_obj_set_size(zone, zone_side, zone_side);
+  lv_obj_align(zone, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_radius(zone, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(zone, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_border_color(zone, lv_color_hex(0x30363d), LV_PART_MAIN);
+  lv_obj_set_style_border_width(zone, 2, LV_PART_MAIN);
+  lv_obj_set_style_outline_width(zone, 0, LV_PART_MAIN);
+  lv_obj_set_style_shadow_width(zone, 0, LV_PART_MAIN);
+  lv_obj_clear_flag(zone, (lv_obj_flag_t)(LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE));
+
+  // Anchor mark at centre (small filled dot).
+  int anchor_d = side / 16; if (anchor_d < 4) anchor_d = 4;
+  lv_obj_t* mark = lv_obj_create(root);
+  lv_obj_set_size(mark, anchor_d, anchor_d);
+  lv_obj_align(mark, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_radius(mark, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(mark, lv_color_hex(kMutedHex), LV_PART_MAIN);
+  lv_obj_set_style_border_width(mark, 0, LV_PART_MAIN);
+  lv_obj_set_style_outline_width(mark, 0, LV_PART_MAIN);
+  lv_obj_set_style_shadow_width(mark, 0, LV_PART_MAIN);
+  lv_obj_clear_flag(mark, (lv_obj_flag_t)(LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE));
+
+  auto* a = new AnchorTrackCtx{};
+  a->zone = zone;
+  a->cx = cx;
+  a->cy = cy;
+  // frac 1.0 (currentRadius == maxRadius) maps to the boundary circle.
+  a->plot_r = zone_side / 2.0f;
+  a->boat_r = (side / 22.0f); if (a->boat_r < 3.f) a->boat_r = 3.f;
+  a->track_hex = colors.fg;
+  a->dist_disp = parse_display(spec);
+  if (a->dist_disp.unit[0] == '\0') {
+    snprintf(a->dist_disp.unit, sizeof(a->dist_disp.unit), "m");
+  }
+
+  // Track band polylines (drawn above the zone circle, below the boat dot).
+  for (int b = 0; b < kTrackBands; ++b) {
+    lv_obj_t* ln = lv_line_create(root);
+    lv_obj_set_style_line_color(ln, lv_color_hex(a->track_hex), LV_PART_MAIN);
+    lv_obj_set_style_line_width(ln, 2, LV_PART_MAIN);
+    lv_obj_set_style_line_rounded(ln, true, LV_PART_MAIN);
+    lv_obj_add_flag(ln, LV_OBJ_FLAG_HIDDEN);
+    a->bands[b] = ln;
+  }
+
+  // Current-position dot (drawn last = on top).
+  lv_obj_t* boat = lv_obj_create(root);
+  lv_obj_set_size(boat, (int)(a->boat_r * 2), (int)(a->boat_r * 2));
+  lv_obj_set_style_radius(boat, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+  lv_obj_set_style_border_width(boat, 0, LV_PART_MAIN);
+  lv_obj_set_style_outline_width(boat, 0, LV_PART_MAIN);
+  lv_obj_set_style_shadow_width(boat, 0, LV_PART_MAIN);
+  lv_obj_add_flag(boat, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(boat, (lv_obj_flag_t)(LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE));
+  a->boat = boat;
+
+  // Chain-out (maxRadius) label sitting on the top of the boundary ring.
+  lv_obj_t* chain = lv_label_create(root);
+  lv_obj_set_style_text_color(chain, lv_color_hex(kMutedHex), LV_PART_MAIN);
+  lv_obj_set_style_text_font(chain, &lv_font_montserrat_14, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(chain, lv_color_hex(0x0d1117), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(chain, LV_OPA_COVER, LV_PART_MAIN);  // punch through the ring
+  lv_obj_set_style_pad_hor(chain, 3, LV_PART_MAIN);
+  lv_label_set_text(chain, "");
+  // Centre it on the top edge of the boundary circle.
+  lv_obj_align(chain, LV_ALIGN_CENTER, 0, -(int)(a->plot_r));
+  a->chain = chain;
+
+  // Small current-radius readout at the bottom edge.
+  lv_obj_t* caption = lv_label_create(root);
+  lv_obj_set_style_text_color(caption, lv_color_hex(kMutedHex), LV_PART_MAIN);
+  lv_obj_set_style_text_font(caption, &lv_font_montserrat_14, LV_PART_MAIN);
+  lv_label_set_text(caption, "ANCHOR UP");
+  lv_obj_align(caption, LV_ALIGN_BOTTOM_MID, 0, 0);
+  a->caption = caption;
+
+  lv_obj_set_user_data(root, a);
+  lv_obj_add_event_cb(
+      root,
+      [](lv_event_t* e) {
+        delete static_cast<AnchorTrackCtx*>(lv_obj_get_user_data(
+            static_cast<lv_obj_t*>(lv_event_get_target(e))));
+      },
+      LV_EVENT_DELETE, nullptr);
+
+  lv_subject_add_observer_obj(
+      s_state,
+      [](lv_observer_t* obs, lv_subject_t* s) {
+        auto* w = lv_observer_get_target_obj(obs);
+        auto* a = static_cast<AnchorTrackCtx*>(lv_obj_get_user_data(w));
+        const char* v = static_cast<const char*>(lv_subject_get_pointer(s));
+        a->state_on = v && strcasecmp(v, "on") == 0;
+        anchor_track_render(a);
+      },
+      root, nullptr);
+
+  lv_subject_add_observer_obj(
+      s_brg,
+      [](lv_observer_t* obs, lv_subject_t* s) {
+        auto* w = lv_observer_get_target_obj(obs);
+        auto* a = static_cast<AnchorTrackCtx*>(lv_obj_get_user_data(w));
+        a->bearing_rad = lv_subject_get_float(s);
+        a->have_bearing = true;
+        anchor_track_push(a);
+        anchor_track_render(a);
+      },
+      root, nullptr);
+
+  lv_subject_add_observer_obj(
+      s_cur,
+      [](lv_observer_t* obs, lv_subject_t* s) {
+        auto* w = lv_observer_get_target_obj(obs);
+        auto* a = static_cast<AnchorTrackCtx*>(lv_obj_get_user_data(w));
+        a->cur_m = lv_subject_get_float(s);
+        anchor_track_push(a);
+        anchor_track_render(a);
+      },
+      root, nullptr);
+
+  lv_subject_add_observer_obj(
+      s_max,
+      [](lv_observer_t* obs, lv_subject_t* s) {
+        auto* w = lv_observer_get_target_obj(obs);
+        auto* a = static_cast<AnchorTrackCtx*>(lv_obj_get_user_data(w));
+        a->max_m = lv_subject_get_float(s);
+        anchor_track_render(a);
+      },
+      root, nullptr);
+
+  anchor_track_render(a);
+  return root;
+}
+
 }  // namespace
 
 lv_obj_t* build_widget(BuildCtx& ctx, JsonObjectConst spec,
@@ -1811,6 +2143,7 @@ lv_obj_t* build_widget(BuildCtx& ctx, JsonObjectConst spec,
   if (t == "button")   return build_button(ctx, spec, err);
   if (t == "notifications") return build_notifications(ctx, spec, err);
   if (t == "anchor")   return build_anchor(ctx, spec, err);
+  if (t == "anchor_track") return build_anchor_track(ctx, spec, err);
   *err = std::string("unknown widget kind: ") + t;
   return nullptr;
 }
