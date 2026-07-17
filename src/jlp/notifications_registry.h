@@ -59,6 +59,11 @@ struct Notification {
   std::string path;     // e.g. "mob.<uuid>" (after "notifications.")
   std::string message;
   NotState state;
+  // SK `method` array carries "visual"/"sound". The chime fires ONLY when
+  // "sound" is explicitly present — a producer must opt in. A visual-only
+  // method, a server-silenced alert (which drops "sound"), or a delta with
+  // no method at all all stay quiet. (The overlay still pops on state.)
+  bool wants_sound = false;
 };
 
 /** Tracks the live set of `notifications.*` paths broadcast by SK.
@@ -119,6 +124,15 @@ class NotificationsRegistry {
     return last_change_was_escalation_;
   }
 
+  /** True if the last change was an escalation AND that notification's
+   *  SK `method` asked for "sound". The chime gate uses this so the beep
+   *  reflects the alert that actually fired — not most_severe(), which
+   *  could be a different, quieter (visual-only) alert. Only meaningful
+   *  inside an on_change() callback. */
+  bool last_escalation_wants_sound() const {
+    return last_escalation_wants_sound_;
+  }
+
   /** Register a change observer. Returns an opaque token; the caller
    *  must call `off_change(token)` before any captured pointer is
    *  destroyed. Fires on the event_loop task. */
@@ -157,6 +171,7 @@ class NotificationsRegistry {
   // last_change_was_escalation(). Reset to false at the top of every
   // apply() invocation.
   bool last_change_was_escalation_ = false;
+  bool last_escalation_wants_sound_ = false;
 };
 
 NotificationsRegistry& notifications();

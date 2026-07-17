@@ -22,6 +22,7 @@ void NotificationsRegistry::apply(const std::string& path_after_prefix,
   // so a previous escalation doesn't bleed into a later non-event
   // (the flag is read by main.cpp's wake hook only).
   last_change_was_escalation_ = false;
+  last_escalation_wants_sound_ = false;
 
   // Treat a null value (path cleared) as removal.
   if (value.isNull()) {
@@ -38,6 +39,13 @@ void NotificationsRegistry::apply(const std::string& path_after_prefix,
   n.path = path_after_prefix;
   n.message = value["message"] | "";
   n.state = parse_not_state(value["state"] | "normal");
+  // Chime only when the SK `method` array explicitly contains "sound".
+  // Absent method, visual-only, or a server-silenced alert (sound
+  // dropped) all leave wants_sound false → no beep.
+  for (JsonVariantConst m : value["method"].as<JsonArrayConst>()) {
+    const char* s = m.as<const char*>();
+    if (s && strcmp(s, "sound") == 0) { n.wants_sound = true; break; }
+  }
 
   // Cleared (nominal/normal): re-arm any local ack so a future
   // alert state pops the overlay anew. Keep the entry in the map
@@ -82,6 +90,10 @@ void NotificationsRegistry::apply(const std::string& path_after_prefix,
   const bool was_new = it == map_.end();
   const NotState prev_state = was_new ? NotState::Normal : it->second.state;
   last_change_was_escalation_ = n.state > prev_state;
+  // Whether THIS escalating notification asked for sound — so the chime
+  // keys off the alert that actually fired, not most_severe() (a
+  // different, quieter alert could be more severe and suppress the beep).
+  last_escalation_wants_sound_ = last_change_was_escalation_ && n.wants_sound;
   map_[path_after_prefix] = n;
   ESP_LOGI(TAG, "%s = %s \"%s\"%s", path_after_prefix.c_str(),
            not_state_name(n.state), n.message.c_str(),
