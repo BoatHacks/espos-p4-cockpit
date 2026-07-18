@@ -2,6 +2,7 @@
 
 #include <math.h>
 
+#include "../audio/chime.h"
 #include "../net/sk_put.h"
 #include "../notifications_registry.h"
 #include "../subject_registry.h"
@@ -382,10 +383,69 @@ lv_obj_t* build_value(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
 // Requires `bind` (Int subject). No optimistic latch — visual state
 // follows the subscription only. PUT path (tap → server PUT → echo
 // back) lands in step 7.
+// Panel-local audio-mute toggle (bind "@audio_mute"). Same look as a
+// normal toggle, but ON = muted (chime suppressed on this panel, current
+// and future) with no SK path behind it — it reads and writes
+// chime().muted() directly. Authoritative local state, so no
+// subscription and no reconcile timer.
+lv_obj_t* build_audio_mute_toggle(BuildCtx& ctx, JsonObjectConst spec,
+                                  std::string* err) {
+  // Only one mute control per layout: each switch snapshots
+  // chime().muted() at build time, so two would drift out of sync (tap
+  // one, the other's visual is stale and inverts on its next tap).
+  // live_paths is layout-scoped, so this resets on each apply.
+  if (!ctx.live_paths.insert("@audio_mute").second) {
+    *err = "toggle: only one @audio_mute per layout";
+    return nullptr;
+  }
+  const Colors colors = parse_colors(spec);
+  lv_obj_t* root = lv_obj_create(ctx.parent);
+  apply_geometry(root, spec);
+  lv_obj_set_style_bg_color(root, lv_color_hex(colors.bg), LV_PART_MAIN);
+  lv_obj_set_style_border_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_outline_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_outline_pad(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_shadow_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_radius(root, 6, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(root, 8, LV_PART_MAIN);
+  lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
+
+  const char* caption = spec["label"] | "MUTE";
+  lv_obj_t* l = lv_label_create(root);
+  lv_obj_set_style_text_color(l, lv_color_hex(colors.fg), LV_PART_MAIN);
+  lv_obj_set_style_text_font(l, font_from_spec(spec, &lv_font_montserrat_20),
+                             LV_PART_MAIN);
+  lv_label_set_text(l, caption);
+  lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
+
+  lv_obj_t* sw = lv_switch_create(root);
+  lv_obj_set_size(sw, 60, 30);
+  lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
+  if (chime().muted()) lv_obj_add_state(sw, LV_STATE_CHECKED);
+
+  lv_obj_add_event_cb(
+      sw,
+      [](lv_event_t* e) {
+        auto* w = static_cast<lv_obj_t*>(lv_event_get_target(e));
+        bool on = lv_obj_has_state(w, LV_STATE_CHECKED);  // post-flip state
+        chime().set_muted(on);
+      },
+      LV_EVENT_VALUE_CHANGED, nullptr);
+  return root;
+}
+
 lv_obj_t* build_toggle(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   const char* path = spec["bind"] | (const char*)nullptr;
   if (!path) { *err = "toggle: bind required"; return nullptr; }
   const Colors colors = parse_colors(spec);
+
+  // Local action sentinel: bind "@audio_mute" makes the toggle a
+  // panel-local audio mute — it reflects/flips chime().muted() instead
+  // of a SK path, with no PUT and no subscription. Handled entirely in
+  // build_audio_mute_toggle to keep the SK-backed path below clean.
+  if (std::string(path) == "@audio_mute") {
+    return build_audio_mute_toggle(ctx, spec, err);
+  }
 
   lv_subject_t* sub = ctx.reg.get_or_create(path, SubjectKind::Int);
   if (!sub) { *err = std::string("kind conflict on ") + path; return nullptr; }

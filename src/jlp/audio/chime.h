@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include "sensesp_cockpit_display/hal/audio_driver.h"
 
 #include "../notifications_registry.h"
@@ -21,8 +23,9 @@ class Chime {
   /// a speaker) — play() then no-ops.
   void init(sensesp_cockpit_display::AudioDriver* audio) { audio_ = audio; }
 
-  /// Play the tone for `state`. Nominal/normal are silent.
-  void play(NotState state);
+  /// Play the tone for `state`. Nominal/normal are silent. Suppressed
+  /// while muted unless `ignore_mute` (the /beep diagnostic forces one).
+  void play(NotState state, bool ignore_mute = false);
 
   /// True if a working audio sink is wired (for the /hello status +
   /// /beep probe). False on a speaker-less board or a failed codec init.
@@ -31,10 +34,19 @@ class Chime {
   /// Force an alarm-severity tone regardless of gating. Drives the
   /// /beep diagnostic endpoint so audibility can be tested over HTTP
   /// without waiting for a real notification.
-  void test() { play(NotState::Alarm); }
+  void test() { play(NotState::Alarm, /*ignore_mute=*/true); }
+
+  /// Panel-local standing mute. While muted, play() no-ops — the alert
+  /// overlay still shows alarms, but this panel stays silent (current
+  /// AND future) until un-muted. Local to this panel; doesn't touch SK.
+  /// Atomic: written on event_loop (the toggle) but also read on the
+  /// httpd task via /beep -> test() -> play().
+  void set_muted(bool m) { muted_ = m; }
+  bool muted() const { return muted_; }
 
  private:
   sensesp_cockpit_display::AudioDriver* audio_ = nullptr;
+  std::atomic_bool muted_{false};
 };
 
 Chime& chime();
