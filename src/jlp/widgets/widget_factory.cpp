@@ -3,6 +3,7 @@
 #include <math.h>
 
 #include "../audio/chime.h"
+#include "../net/drop_here.h"
 #include "../net/sk_put.h"
 #include "../notifications_registry.h"
 #include "../subject_registry.h"
@@ -1215,6 +1216,11 @@ struct ButtonCtx {
 };
 
 void button_fire(const std::string& path, const std::string& json) {
+  // Local action sentinel: a button bound to "@drop_here" drops the
+  // anchor at the boat's current fix (the panel can't compose a lat/lon
+  // from a fixed press_value, so it fetches the position and PUTs it).
+  // The press_value is ignored; hold_ms still latches as a safety guard.
+  if (path == "@drop_here") { drop_anchor_here(); return; }
   if (json.empty()) return;
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, json);

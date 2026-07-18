@@ -23,6 +23,14 @@ void put_string(const std::string& path, const std::string& value);
 // clearing navigation.anchor.position.
 void put_null(const std::string& path);
 
+// PUT a position object {latitude, longitude} to `path` — used to drop
+// the anchor at the boat's current fix (navigation.anchor.position).
+// Like put_null, sends the SK put envelope directly since SKPutRequest<T>
+// is scalar-typed. Callable from any task (send is fire-and-forget over
+// the WS).
+void put_position(const std::string& path, double latitude,
+                  double longitude);
+
 /** PUT a notification ACK to `notifications.<path_after_prefix>`.
  *  Sends the SK convention `{value: {state: "normal", method: [],
  *  message: ""}}`. Called by the alert overlay when the operator
