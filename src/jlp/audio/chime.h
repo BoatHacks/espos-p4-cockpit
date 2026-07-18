@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include "sensesp_cockpit_display/hal/audio_driver.h"
 
 #include "../notifications_registry.h"
@@ -37,12 +39,14 @@ class Chime {
   /// Panel-local standing mute. While muted, play() no-ops — the alert
   /// overlay still shows alarms, but this panel stays silent (current
   /// AND future) until un-muted. Local to this panel; doesn't touch SK.
+  /// Atomic: written on event_loop (the toggle) but also read on the
+  /// httpd task via /beep -> test() -> play().
   void set_muted(bool m) { muted_ = m; }
   bool muted() const { return muted_; }
 
  private:
   sensesp_cockpit_display::AudioDriver* audio_ = nullptr;
-  bool muted_ = false;
+  std::atomic_bool muted_{false};
 };
 
 Chime& chime();
