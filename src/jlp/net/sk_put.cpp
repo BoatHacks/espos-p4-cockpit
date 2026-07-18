@@ -82,6 +82,38 @@ void put_null(const std::string& path) {
   ws->sendTXT(s);
 }
 
+void put_position(const std::string& path, double latitude,
+                  double longitude) {
+  ESP_LOGI(TAG, "PUT %s = {lat=%.6f, lon=%.6f}", path.c_str(), latitude,
+           longitude);
+  // Called from the drop-here fetch task (off event_loop), so marshal the
+  // WS send onto event_loop like subscribe_new_paths does — sendTXT must
+  // be serialized there with the rest of the WS traffic. Capture by value.
+  sensesp::event_loop()->onDelay(0, [path, latitude, longitude]() {
+    auto app = sensesp::SensESPApp::get();
+    if (!app) return;
+    auto ws = app->get_ws_client();
+    if (!ws) return;
+
+    // {"requestId":<uuid>,"put":{"path":<path>,"value":{latitude,longitude}}}.
+    // SKPutRequest<T> is scalar-typed, so build the envelope directly (as
+    // put_null does). The anchor-alarm plugin's putPosition handler drops
+    // the anchor at this position.
+    JsonDocument doc;
+    JsonObject root = doc.to<JsonObject>();
+    root["requestId"] = sensesp::generate_uuid4();
+    JsonObject put = root["put"].to<JsonObject>();
+    put["path"] = path;
+    JsonObject val = put["value"].to<JsonObject>();
+    val["latitude"] = latitude;
+    val["longitude"] = longitude;
+
+    String s;
+    serializeJson(doc, s);
+    ws->sendTXT(s);
+  });
+}
+
 // ---- notification ACK ----
 //
 // SignalK PUT requests against notifications.* paths are NOT honored

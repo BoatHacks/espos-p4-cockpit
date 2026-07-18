@@ -3,6 +3,7 @@
 #include <math.h>
 
 #include "../audio/chime.h"
+#include "../net/drop_here.h"
 #include "../net/sk_put.h"
 #include "../notifications_registry.h"
 #include "../subject_registry.h"
@@ -1214,7 +1215,18 @@ struct ButtonCtx {
   bool press_fired;
 };
 
-void button_fire(const std::string& path, const std::string& json) {
+void button_fire(const std::string& path, const std::string& json,
+                 bool is_press) {
+  // Local action sentinel: a button bound to "@drop_here" drops the
+  // anchor at the boat's current fix (the panel can't compose a lat/lon
+  // from a fixed press_value, so it fetches the position and PUTs it).
+  // Fire on PRESS only — the release call would otherwise start a
+  // second drop task. press_value is ignored; hold_ms latches as a
+  // safety guard.
+  if (path == "@drop_here") {
+    if (is_press) drop_anchor_here();
+    return;
+  }
   if (json.empty()) return;
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, json);
@@ -1287,7 +1299,7 @@ lv_obj_t* build_button(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
         // Visual press feedback: dim the tile slightly.
         lv_obj_set_style_bg_opa(c->root, LV_OPA_70, LV_PART_MAIN);
         if (c->hold_ms == 0) {
-          button_fire(c->path, c->press_json);
+          button_fire(c->path, c->press_json, true);
           c->press_fired = true;
           return;
         }
@@ -1296,7 +1308,7 @@ lv_obj_t* build_button(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
         c->hold_timer = lv_timer_create(
             [](lv_timer_t* t) {
               auto* c = static_cast<ButtonCtx*>(lv_timer_get_user_data(t));
-              button_fire(c->path, c->press_json);
+              button_fire(c->path, c->press_json, true);
               c->press_fired = true;
               lv_timer_delete(t);
               c->hold_timer = nullptr;
@@ -1318,7 +1330,7 @@ lv_obj_t* build_button(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
           return;
         }
         if (c->press_fired) {
-          button_fire(c->path, c->release_json);
+          button_fire(c->path, c->release_json, false);
         }
       },
       LV_EVENT_RELEASED, bctx);
