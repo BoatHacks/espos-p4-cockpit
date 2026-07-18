@@ -112,7 +112,13 @@ void AlertOverlay::init() {
     // on the same enabled_/min_state_ the overlay shows, so a muted or
     // below-threshold notification stays silent. configure()'s rebuild
     // (layout swaps) doesn't run through here, so swaps are silent too.
-    if (enabled_ && notifications().last_change_was_escalation()) {
+    // Chime only when the alert that ESCALATED asked for sound (via its
+    // SK `method`) — not most_severe(), which could be a different,
+    // quieter alert. A visual-only or server-silenced alert shows on the
+    // overlay but stays quiet. Still gate on min_state via most_severe so
+    // a below-threshold escalation doesn't beep.
+    if (enabled_ && notifications().last_change_was_escalation() &&
+        notifications().last_escalation_wants_sound()) {
       const Notification* n = notifications().most_severe();
       if (n && n->state >= min_state_) chime().play(n->state);
     }
