@@ -388,7 +388,16 @@ lv_obj_t* build_value(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
 // and future) with no SK path behind it — it reads and writes
 // chime().muted() directly. Authoritative local state, so no
 // subscription and no reconcile timer.
-lv_obj_t* build_audio_mute_toggle(BuildCtx& ctx, JsonObjectConst spec) {
+lv_obj_t* build_audio_mute_toggle(BuildCtx& ctx, JsonObjectConst spec,
+                                  std::string* err) {
+  // Only one mute control per layout: each switch snapshots
+  // chime().muted() at build time, so two would drift out of sync (tap
+  // one, the other's visual is stale and inverts on its next tap).
+  // live_paths is layout-scoped, so this resets on each apply.
+  if (!ctx.live_paths.insert("@audio_mute").second) {
+    *err = "toggle: only one @audio_mute per layout";
+    return nullptr;
+  }
   const Colors colors = parse_colors(spec);
   lv_obj_t* root = lv_obj_create(ctx.parent);
   apply_geometry(root, spec);
@@ -435,7 +444,7 @@ lv_obj_t* build_toggle(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   // of a SK path, with no PUT and no subscription. Handled entirely in
   // build_audio_mute_toggle to keep the SK-backed path below clean.
   if (std::string(path) == "@audio_mute") {
-    return build_audio_mute_toggle(ctx, spec);
+    return build_audio_mute_toggle(ctx, spec, err);
   }
 
   lv_subject_t* sub = ctx.reg.get_or_create(path, SubjectKind::Int);
