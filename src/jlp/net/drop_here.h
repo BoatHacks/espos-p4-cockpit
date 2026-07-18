@@ -7,7 +7,9 @@ namespace jlp {
 // kind), so instead of caching it we fetch it once on demand: a detached
 // task GETs navigation/position over authenticated SK REST, then PUTs
 // {latitude, longitude} to navigation.anchor.position, which the
-// anchor-alarm plugin (>= 2.9.0) drops on. Fire-and-forget; safe to call
+// anchor-alarm plugin drops on. Works against the deployed plugin as-is
+// (2.8.0+) — it supplies the position explicitly, so it doesn't need
+// 2.9.0's optional-position rework. Fire-and-forget; safe to call
 // from the event_loop task (the blocking GET runs on its own task).
 //
 // The SK server host/port + auth are read from the live SK config, the

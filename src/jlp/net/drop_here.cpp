@@ -88,10 +88,13 @@ void drop_task(void* arg) {
     return;
   }
   JsonVariantConst v = doc.as<JsonObjectConst>()["value"];
-  double lat = v["latitude"] | 1e9;
-  double lon = v["longitude"] | 1e9;
-  if (lat > 1e8 || lon > 1e8) {
-    ESP_LOGW(TAG, "no GPS fix in position response — not dropping");
+  const double kNoFix = 1e9;
+  double lat = v["latitude"] | kNoFix;
+  double lon = v["longitude"] | kNoFix;
+  // Reject a missing/out-of-range fix before PUTting a bogus drop.
+  if (!(lat >= -90.0 && lat <= 90.0 && lon >= -180.0 && lon <= 180.0)) {
+    ESP_LOGW(TAG, "no valid GPS fix (lat=%.3f lon=%.3f) — not dropping", lat,
+             lon);
     delete a;
     vTaskDelete(NULL);
     return;
