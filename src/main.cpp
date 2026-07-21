@@ -404,25 +404,49 @@ void setup() {
 #ifndef COCKPIT_BOARD_4B
   event_loop()->onRepeat(5000, [receiver, n2k_server]() {
     int64_t rx_idle = receiver->seconds_since_last_rx();
-    // iram = free INTERNAL RAM (task stacks live here, not PSRAM); watch
-    // it for the slow leak that eventually starves the WS connect
-    // worker. heap = total (PSRAM-inflated) for reference.
-    ESP_LOGI("main", "n2k: rx_idle=%llds cl=%u | heap=%lu iram=%u",
+    // iram = free INTERNAL RAM (task stacks + WiFi/LWIP buffers live
+    // here, not PSRAM); it — not the PSRAM-inflated total heap — is what
+    // the watchdog reboots on. iram_min = lowest internal free ever seen
+    // (the deepest burst dip); iram_big = largest contiguous internal
+    // block (what xTaskCreate needs); psram = free PSRAM. heap = total.
+    ESP_LOGI("main",
+             "n2k: rx_idle=%llds cl=%u | heap=%lu iram=%u "
+             "iram_min=%u iram_big=%u psram=%lu",
              (long long)(receiver->ever_received() ? rx_idle : -1),
              (unsigned)n2k_server->connected_clients(),
              (unsigned long)esp_get_free_heap_size(),
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL |
+                                                        MALLOC_CAP_8BIT),
+             (unsigned long)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
   });
 #else
-  // 4B has no N2K log, but the internal-RAM leak (and the watchdog that
-  // reboots on it) apply here too — emit a heap/iram line so it's
+  // 4B has no N2K log, but the internal-RAM pressure (and the watchdog
+  // that reboots on it) apply here too — emit the same breakdown so it's
   // observable on this board as well.
   event_loop()->onRepeat(5000, []() {
-    ESP_LOGI("main", "heap=%lu iram=%u",
+    ESP_LOGI("main",
+             "heap=%lu iram=%u iram_min=%u iram_big=%u psram=%lu",
              (unsigned long)esp_get_free_heap_size(),
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL |
+                                                        MALLOC_CAP_8BIT),
+             (unsigned long)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
   });
 #endif
+
+  // One-time boot marker: the fresh internal-RAM baseline right after
+  // setup, before the WS connects and the layout's listeners load. The
+  // gap between this and the loaded steady-state is the structural cost
+  // that lands in internal RAM; keeping it visible makes a regression
+  // (or a config change that relocates buffers to PSRAM) obvious.
+  ESP_LOGI("main", "boot: iram=%u iram_big=%u psram=%lu",
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL |
+                                                      MALLOC_CAP_8BIT),
+           (unsigned long)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 }
 
 void loop() { event_loop()->tick(); }
