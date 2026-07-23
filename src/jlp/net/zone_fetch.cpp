@@ -69,16 +69,58 @@ struct ValueResult {
 // when non-empty, is sent as a Bearer credential — required once the SK
 // server has security enabled, or every /meta and /value request 401s
 // and quiet paths (e.g. a steady tank level) never get their zones.
-bool http_get_body(esp_http_client_handle_t client, const std::string& url,
-                   const std::string& token, std::string* body) {
-  esp_http_client_set_url(client, url.c_str());
+// Accumulate the response body into the std::string handed in via
+// user_data. Used with esp_http_client_perform (below) instead of the
+// open()/fetch_headers()/read() streaming pattern: that pattern leaves
+// esp_http_client's cache_data_in_fetch_hdr flag set (only perform()
+// clears it), so when a response body arrives while the headers are
+// still parsing — routine for SK's small REST replies delivered in one
+// segment — it hits an assert in http_on_body (orig_raw_data ==
+// raw_data) and reboots the device. perform() disables that cache and
+// routes the body through this handler, sidestepping the assert.
+esp_err_t zone_http_event(esp_http_client_event_t* e) {
+  if (e->event_id == HTTP_EVENT_ON_DATA && e->user_data) {
+    auto* body = static_cast<std::string*>(e->user_data);
+    if (body->size() + e->data_len <= kMaxMetaBytes) {
+      body->append(static_cast<const char*>(e->data), e->data_len);
+    }
+  }
+  return ESP_OK;
+}
+
+bool http_get_body(const std::string& url, bool ssl, const std::string& token,
+                   std::string* body) {
+  body->clear();
+
+  // A FRESH client per request. The prior form reused one handle across
+  // every path via set_url(); with esp_http_client_perform() that reuse
+  // desyncs the client's internal orig_raw_data/raw_data buffer pointers
+  // and trips assert(orig_raw_data == raw_data) in http_on_body —
+  // rebooting the device mid-fetch (seen on navigation.anchor.* paths).
+  // A new handle per call starts that state clean, and perform() (unlike
+  // open()/fetch_headers()) disables the fetch-header body cache so the
+  // assert path is never entered at all.
+  esp_http_client_config_t cfg = {};
+  cfg.url = url.c_str();
+  cfg.timeout_ms = 3000;
+  cfg.event_handler = zone_http_event;
+  cfg.user_data = body;
+  if (ssl) {
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    cfg.skip_cert_common_name_check = true;
+  }
+  esp_http_client_handle_t client = esp_http_client_init(&cfg);
+  if (!client) return false;
   if (!token.empty()) {
     const std::string bearer = "Bearer " + token;
     esp_http_client_set_header(client, "Authorization", bearer.c_str());
   }
-  if (esp_http_client_open(client, 0) != ESP_OK) return false;
-  int content_length = esp_http_client_fetch_headers(client);
-  int status = esp_http_client_get_status_code(client);
+
+  esp_err_t err = esp_http_client_perform(client);
+  int status = err == ESP_OK ? esp_http_client_get_status_code(client) : 0;
+  esp_http_client_cleanup(client);
+
+  if (err != ESP_OK) return false;
   if (status != 200) {
     // 401 is the signature of a secured SK server with a missing/stale
     // token — surface it, since it silently strips zones from quiet
@@ -86,37 +128,28 @@ bool http_get_body(esp_http_client_handle_t client, const std::string& url,
     if (status == 401) {
       ESP_LOGW(TAG, "401 on %s — SK token missing or rejected", url.c_str());
     }
-    esp_http_client_close(client);
     return false;
   }
-  size_t cap = (content_length > 0 && (size_t)content_length < kMaxMetaBytes)
-                   ? (size_t)content_length
-                   : kMaxMetaBytes;
-  body->resize(cap);
-  int total = 0;
-  while (total < (int)cap) {
-    int n = esp_http_client_read(client, &(*body)[total], cap - total);
-    if (n <= 0) break;
-    total += n;
-  }
-  body->resize(total);
-  esp_http_client_close(client);
-  return total > 0;
+  return !body->empty();
 }
 
 // Fetch + parse one path's /meta. Appends a MetaResult to `out` if the
 // blob carries zones or a description. Does NOT touch event_loop — the
 // whole batch is drained in a single onDelay(0) by the caller.
-void fetch_meta(esp_http_client_handle_t client, const std::string& url,
-                const std::string& token, const std::string& path,
-                std::vector<MetaResult>* out) {
+void fetch_meta(bool ssl, const std::string& url, const std::string& token,
+                const std::string& path, std::vector<MetaResult>* out) {
   std::string body;
-  if (!http_get_body(client, url, token, &body)) return;
+  if (!http_get_body(url, ssl, token, &body)) return;
 
   MetaResult r;
   DeserializationError de = deserializeJson(r.doc, body);
   if (de) {
-    ESP_LOGW(TAG, "%s: parse failed (%s)", path.c_str(), de.c_str());
+    // A 200 with a non-JSON body happens for paths the server exposes
+    // without meta (seen on navigation.anchor.* when the anchor is up).
+    // Harmless — just skip this path's meta. Debug, not warn: it's
+    // expected, not a fault.
+    ESP_LOGD(TAG, "%s: meta not JSON (%s) — skipping", path.c_str(),
+             de.c_str());
     return;
   }
   // Only keep it if there's actually a zones array or description —
@@ -135,11 +168,10 @@ void fetch_meta(esp_http_client_handle_t client, const std::string& url,
 // endpoint has the current reading ready to go. Like fetch_meta, this
 // stays off event_loop; the value is extracted here and the result
 // applied in the batch drain.
-void fetch_value(esp_http_client_handle_t client, const std::string& url,
-                 const std::string& token, const std::string& path,
-                 std::vector<ValueResult>* out) {
+void fetch_value(bool ssl, const std::string& url, const std::string& token,
+                 const std::string& path, std::vector<ValueResult>* out) {
   std::string body;
-  if (!http_get_body(client, url, token, &body)) return;
+  if (!http_get_body(url, ssl, token, &body)) return;
 
   JsonDocument doc;
   if (deserializeJson(doc, body)) return;
@@ -167,28 +199,6 @@ void fetch_value(esp_http_client_handle_t client, const std::string& url,
 void fetch_task(void* arg) {
   auto* a = static_cast<FetchArgs*>(arg);
 
-  // One http client reused across paths — esp_http_client supports
-  // setting a new URL on the existing handle, which avoids the per-
-  // request TCP handshake.
-  esp_http_client_config_t cfg = {};
-  cfg.url = a->ssl ? "https://placeholder" : "http://placeholder";
-  cfg.timeout_ms = 3000;
-  if (a->ssl) {
-    // Match how SensESP's WS client trusts the server: attach the built-
-    // in cert bundle and skip the CN check (SK servers commonly present
-    // a self-signed / IP cert). Without a transport config the TLS
-    // handshake can't complete.
-    cfg.crt_bundle_attach = esp_crt_bundle_attach;
-    cfg.skip_cert_common_name_check = true;
-  }
-  esp_http_client_handle_t client = esp_http_client_init(&cfg);
-  if (!client) {
-    ESP_LOGW(TAG, "http client init failed");
-    delete a;
-    vTaskDelete(NULL);
-    return;
-  }
-
   // Accumulate every parsed result on the fetch task, then apply the
   // whole batch in ONE event_loop callback. The old form marshaled
   // one event_loop()->onDelay(0) per fetch — two per path — so a
@@ -209,12 +219,11 @@ void fetch_task(void* arg) {
       std::to_string(a->port) + "/signalk/v1/api/vessels/self/";
   for (const auto& path : a->paths) {
     const std::string slashed = slashify(path);
-    fetch_meta(client, base + slashed + "/meta", a->token, path, metas.get());
+    fetch_meta(a->ssl, base + slashed + "/meta", a->token, path, metas.get());
     // SK's /value endpoint returns the full node ({value, meta,
     // $source, ...}); we read the `value` member out of that wrapper.
-    fetch_value(client, base + slashed, a->token, path, values.get());
+    fetch_value(a->ssl, base + slashed, a->token, path, values.get());
   }
-  esp_http_client_cleanup(client);
   ESP_LOGI(TAG, "fetched meta + value for %u paths (%u meta, %u val)",
            (unsigned)a->paths.size(), (unsigned)metas->size(),
            (unsigned)values->size());
