@@ -78,12 +78,22 @@ struct ValueResult {
 // segment — it hits an assert in http_on_body (orig_raw_data ==
 // raw_data) and reboots the device. perform() disables that cache and
 // routes the body through this handler, sidestepping the assert.
+// Body sink for the perform() handler: accumulates response data and
+// flags if it would exceed kMaxMetaBytes, so http_get_body can reject an
+// oversized reply rather than parse a truncated prefix.
+struct BodySink {
+  std::string data;
+  bool overflow = false;
+};
+
 esp_err_t zone_http_event(esp_http_client_event_t* e) {
   if (e->event_id == HTTP_EVENT_ON_DATA && e->user_data) {
-    auto* body = static_cast<std::string*>(e->user_data);
-    if (body->size() + e->data_len <= kMaxMetaBytes) {
-      body->append(static_cast<const char*>(e->data), e->data_len);
+    auto* sink = static_cast<BodySink*>(e->user_data);
+    if (sink->data.size() + e->data_len > kMaxMetaBytes) {
+      sink->overflow = true;
+      return ESP_OK;  // keep draining, but the result is now rejected
     }
+    sink->data.append(static_cast<const char*>(e->data), e->data_len);
   }
   return ESP_OK;
 }
@@ -91,6 +101,7 @@ esp_err_t zone_http_event(esp_http_client_event_t* e) {
 bool http_get_body(const std::string& url, bool ssl, const std::string& token,
                    std::string* body) {
   body->clear();
+  BodySink sink;
 
   // A FRESH client per request. The prior form reused one handle across
   // every path via set_url(); with esp_http_client_perform() that reuse
@@ -104,7 +115,7 @@ bool http_get_body(const std::string& url, bool ssl, const std::string& token,
   cfg.url = url.c_str();
   cfg.timeout_ms = 3000;
   cfg.event_handler = zone_http_event;
-  cfg.user_data = body;
+  cfg.user_data = &sink;
   if (ssl) {
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
     cfg.skip_cert_common_name_check = true;
@@ -130,6 +141,15 @@ bool http_get_body(const std::string& url, bool ssl, const std::string& token,
     }
     return false;
   }
+  if (sink.overflow) {
+    // Reject rather than hand back a truncated prefix that would parse
+    // into wrong/partial meta. kMaxMetaBytes (8 KiB) is well above any
+    // real SK meta/value blob, so this only trips on a runaway response.
+    ESP_LOGW(TAG, "%s: response exceeds %u bytes — skipping", url.c_str(),
+             (unsigned)kMaxMetaBytes);
+    return false;
+  }
+  *body = std::move(sink.data);
   return !body->empty();
 }
 
@@ -180,13 +200,16 @@ void fetch_value(bool ssl, const std::string& url, const std::string& token,
 
   ValueResult r;
   r.path = path;
-  if (v.is<float>() || v.is<double>()) {
-    r.is_float = true;
-    r.f = v.as<float>();
-  } else if (v.is<bool>()) {
+  // Check bool and int before float: ArduinoJson reports is<float>() true
+  // for integers too, so testing float first would route an integer
+  // reading through as<float>() and lose precision on large values.
+  if (v.is<bool>()) {
     r.i = v.as<bool>() ? 1 : 0;
   } else if (v.is<int>()) {
     r.i = v.as<int>();
+  } else if (v.is<float>() || v.is<double>()) {
+    r.is_float = true;
+    r.f = v.as<float>();
   } else {
     // String / object values aren't seeded — string subjects read
     // description() at build time and the str_buf is owned by the WS
