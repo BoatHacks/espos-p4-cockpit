@@ -219,9 +219,9 @@ designer refuses to push widget kinds the device doesn't advertise.
 - **No AI attribution anywhere.** No "Co-Authored-By: Claude", no
   CLAUDE.md content in the repo body, no AI-tool mentions in commits
   / PRs / code.
-- **Code review**: `cr review --plain --type committed --base
-  jlp-json-layout-player` on a feature branch. Save output the first
-  time; `cr` is rate-limited ~50 min between runs.
+- **Code review**: `cr review --plain --type committed --base master`
+  on a feature branch. Save output the first time; `cr` is rate-limited
+  ~50 min between runs.
 - **Comments**: WHY only. No echo comments, no "added for issue #X"
   rot bait, no multi-paragraph docstrings.
 
