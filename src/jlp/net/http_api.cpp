@@ -18,6 +18,8 @@
 
 #include "sensesp_cockpit_display/lvgl/lv_drivers.h"
 
+#include "sensesp_wyoming_satellite/wyoming_satellite.h"
+
 #include "../layout/layout_manager.h"
 #include "../layout/store.h"
 #include "../audio/chime.h"
@@ -25,6 +27,14 @@
 static const char* TAG = "jlp.http";
 
 namespace jlp {
+
+namespace {
+sensesp_wyoming::WyomingSatellite* g_wyoming = nullptr;
+}  // namespace
+
+void http_api_set_wyoming(sensesp_wyoming::WyomingSatellite* sat) {
+  g_wyoming = sat;
+}
 
 namespace {
 
@@ -477,6 +487,11 @@ esp_err_t hello_get(httpd_req_t* req) {
   resp["active_layout_name"] = name;
   resp["layout_source"] = src_str;
   resp["audio"] = chime().audio_ready() ? "ready" : "unavailable";
+  if (g_wyoming && g_wyoming->running()) {
+    resp["voice"] = g_wyoming->client_connected() ? "connected" : "listening";
+  } else {
+    resp["voice"] = "unavailable";
+  }
   std::string out;
   serializeJson(resp, out);
   httpd_resp_sendstr(req, out.c_str());
