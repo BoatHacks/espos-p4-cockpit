@@ -124,7 +124,7 @@ nc <device-ip> 2323                    # remote log stream
 
 Target: `esp32-p4`, 16 MB flash, PSRAM enabled, LittleFS partition. See [platformio.ini](platformio.ini).
 
-The firmware currently depends on a local checkout of [SensESP](https://github.com/SignalK/SensESP) (branch `local/jlp-bridge`) which carries the `sendMeta=all` WS feature + `on_meta` / `on_value` hooks — the WS meta stream is how widgets learn zone definitions for color tinting. Revert to upstream once the matching PRs merge.
+The firmware depends on released [SensESP](https://github.com/SignalK/SensESP) `>= 3.5.0` (pinned in [platformio.ini](platformio.ini)). The WS meta stream (`sendMeta=all` + `SKMetadataListener`) — how widgets learn zone definitions for color tinting — and the `SKPrefixListener` the notifications registry uses are all in that release.
 
 ## Push your first layout
 

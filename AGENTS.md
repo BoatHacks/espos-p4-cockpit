@@ -9,12 +9,13 @@ NMEA 2000 gateway (TWAI rx/tx + a candump TCP server on port 2599).
 Companion projects:
 - **signalk-hmi-designer** — the SignalK webapp that designs and pushes
   layouts. Lives at `../signalk-hmi-designer`.
-- **SensESP** — symlinked at `../SensESP`, branch `jlp-bridge-v2` =
-  upstream `main` + `SKPrefixListener` (pending
-  [PR #1047](https://github.com/SignalK/SensESP/pull/1047)). The old
-  `sendMeta=all` + `on_meta` work already landed upstream; `on_meta`
-  was refactored into `SKMetadataListener`, which the firmware now
-  uses. Drop the symlink for the registry version once #1047 releases.
+- **SensESP** — the released registry library, pinned
+  `SignalK/SensESP@^3.5.0` in `platformio.ini`. The local fork is
+  retired: `SKPrefixListener` (the wildcard path-family listener the
+  notifications registry needs) and the subscription-dedupe fix both
+  landed upstream in 3.5.0 (PRs #1048/#1049), and the earlier
+  `sendMeta=all` + `on_meta`→`SKMetadataListener` work is upstream too.
+  No `../SensESP` checkout is needed to build.
 - **sensesp-cockpit-display** / **sensesp-n2k-gateway** /
   **sensesp-ble-gateway** — sister libs, symlinked, contribute HAL, OTA,
   N2K gateway, candump server.
@@ -152,20 +153,16 @@ pre-build and deletes the directory. **Don't** remove the script or its
 `extra_scripts` entry in `platformio.ini` without solving the upstream
 problem.
 
-### SensESP symlink
+### SensESP dependency
 
-`SensESP=symlink://../SensESP` is named explicitly so the local
-checkout (branch `jlp-bridge-v2` = upstream main + `SKPrefixListener`,
-[PR #1047](https://github.com/SignalK/SensESP/pull/1047)) wins over the
-transitive `SignalK/SensESP>=3.3.0` from the sister libs. **Gotcha:**
-pio's symlink install *copies* files into
-`.pio/libdeps/p4_cockpit/SensESP`, and the sister libs' registry pin
-clobbers that copy with a stale/registry version — but `lib_ldf_mode =
-deep` actually compiles against `-I../SensESP/src` (the symlink source
-directly). So the `.pio/libdeps` copy is a red herring; the real
-source is `../SensESP`. If a build can't find a new SensESP symbol,
-confirm `../SensESP` is on the right branch, not the libdeps copy.
-Drop the symlink for the registry version once #1047 releases.
+`SensESP=SignalK/SensESP@^3.5.0` in `lib_deps` is named explicitly so
+this pin wins over the transitive `SignalK/SensESP>=3.3.0` the sister
+libs declare. It resolves the released library from the registry into
+`.pio/libdeps/<env>/SensESP` — no local checkout. Everything the
+firmware relies on (`SKValueListener`, `SKMetadataListener`,
+`SKPrefixListener`, `sendMeta=all`) is in 3.5.0. Bump the pin to adopt a
+newer release; the local fork that used to live at `../SensESP` is
+retired.
 
 ## Adding a widget kind
 
