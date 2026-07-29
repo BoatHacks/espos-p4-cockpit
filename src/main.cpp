@@ -26,6 +26,7 @@
 #include "sensesp_cockpit_display/lvgl/lv_drivers.h"
 #include "sensesp_cockpit_display/net/http_ota.h"
 #include "sensesp_cockpit_display/net/remote_log.h"
+#include "sensesp_wyoming_satellite/wyoming_satellite.h"
 #ifndef COCKPIT_BOARD_4B
 #include "sensesp_n2k_gateway.h"
 #endif
@@ -81,6 +82,16 @@ void setup() {
   auto* audio = new WaveshareAudio();
   audio->init();
   jlp::chime().init(audio);
+
+  // Wyoming voice satellite (:10700). The boat's signalk-wyoming
+  // orchestrator dials out to us and plays TTS through the panel speaker.
+  // Same on 7B/4B (board-agnostic audio sink). Phase 1 = output only.
+  // Construct now (so /hello + the OTA-quiesce hook can reference it), but
+  // START it only after the network stack is up (see below) — its TCP
+  // server calls socket()/bind(), which assert against lwIP if run before
+  // SensESPAppBuilder brings WiFi/lwIP online.
+  auto* wyoming_sat = new sensesp_wyoming::WyomingSatellite(audio);
+  jlp::http_api_set_wyoming(wyoming_sat);
 
   jlp::overlay().init();
   jlp::overlay().set_hostname("p4-cockpit");
@@ -176,6 +187,8 @@ void setup() {
   remote_log_start(2323);
   http_ota_start(8080);
   jlp::http_api_start(8081);
+  // Network is up now — safe to open the Wyoming satellite's TCP listener.
+  wyoming_sat->start();
   jlp::mdns_announce_start(8081);
   jlp::zones().hook_sk_ws();
   jlp::notifications().hook_sk_ws();
@@ -270,11 +283,17 @@ void setup() {
   n2k_server->start();
 
   sensesp_cockpit_display::set_ota_quiesce_callback(
-      [receiver, transmitter, n2k_server]() {
+      [receiver, transmitter, n2k_server, wyoming_sat]() {
+        wyoming_sat->stop();
         n2k_server->stop();
         receiver->stop();
         transmitter->stop();
       });
+#else
+  // 4B has no N2K gateway, but the Wyoming satellite still needs to quiesce
+  // its socket task before an OTA write.
+  sensesp_cockpit_display::set_ota_quiesce_callback(
+      [wyoming_sat]() { wyoming_sat->stop(); });
 #endif
 
   // Watchdog: reboot on WiFi loss, heap exhaustion, or (7B only) N2K
