@@ -85,8 +85,9 @@ void setup() {
   jlp::chime().init(audio);
 
   // Wyoming voice satellite (:10700). The boat's signalk-wyoming
-  // orchestrator dials out to us and plays TTS through the panel speaker.
-  // Same on 7B/4B (board-agnostic audio sink). Phase 1 = output only.
+  // orchestrator dials out to us: it plays TTS through the panel speaker and
+  // (push-to-talk, via the voice widget) captures the mic. Board-agnostic
+  // audio sink, so the same on 7B/4B.
   // Construct now (so /hello + the OTA-quiesce hook can reference it), but
   // START it only after the network stack is up (see below) — its TCP
   // server calls socket()/bind(), which assert against lwIP if run before
