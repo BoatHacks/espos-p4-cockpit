@@ -49,6 +49,7 @@
 #include "jlp/subject_registry.h"
 #include "jlp/alert_overlay.h"
 #include "jlp/audio/chime.h"
+#include "jlp/audio/voice_control.h"
 #include "jlp/notifications_registry.h"
 #include "jlp/sun_state.h"
 #include "jlp/wake_overlay.h"
@@ -92,6 +93,7 @@ void setup() {
   // SensESPAppBuilder brings WiFi/lwIP online.
   auto* wyoming_sat = new sensesp_wyoming::WyomingSatellite(audio);
   jlp::http_api_set_wyoming(wyoming_sat);
+  jlp::voice().init(wyoming_sat);  // mic-button widget drives PTT through this
 
   jlp::overlay().init();
   jlp::overlay().set_hostname("p4-cockpit");

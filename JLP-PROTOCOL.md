@@ -261,6 +261,12 @@ Displayed value = `(raw × scale) + offset`, formatted to `decimals`, then `unit
 - **Live tail only**: the track is built from samples received since the widget loaded (a rolling buffer, ~256 points), not the whole anchoring session (which would need the SK History API). The track **fades with age** — newest bright, oldest dim.
 - Extra fields: `display` (distance-text scaling), `fg_color` (track colour). Same as `anchor`.
 
+#### `voice`
+- Push-to-talk mic button for the on-board Wyoming voice satellite. Tap to start a voice command: the satellite streams the panel mic to the orchestrator (signalk-wyoming / Home Assistant), which transcribes it and publishes the text to `voice.command`. The panel itself never publishes — it is a mic pump.
+- Takes **no `bind`** — it is a panel-local action (like the `@audio_mute` toggle), driving the satellite directly. The caption tracks the satellite state: `TALK` when idle, **`LISTENING`** (green) while streaming mic audio, `…` (grey) when no orchestrator is connected.
+- Requires an orchestrator to have armed the satellite (`run-satellite`); when the satellite is output-only (`pause-satellite`) a tap is a no-op.
+- Extra fields: `label` (idle caption, default `TALK`), `bg_color`, `fg_color`.
+
 ### Validation rules
 
 A layout MUST be rejected if any of the following holds:

@@ -3,6 +3,7 @@
 #include <math.h>
 
 #include "../audio/chime.h"
+#include "../audio/voice_control.h"
 #include "../net/drop_here.h"
 #include "../net/sk_put.h"
 #include "../notifications_registry.h"
@@ -2201,6 +2202,105 @@ lv_obj_t* build_anchor_track(BuildCtx& ctx, JsonObjectConst spec,
 
 }  // namespace
 
+namespace {
+// Per-widget context for the voice mic button: the label + a poll timer that
+// reflects the satellite state (0 disc / 1 idle / 2 listening / 3 speaking).
+struct VoiceCtx {
+  lv_obj_t* root;
+  lv_obj_t* label;
+  lv_timer_t* timer;
+  int last = -1;
+};
+}  // namespace
+
+// `voice` — a push-to-talk mic button. Tap to start a voice command; the
+// tile reflects the satellite state. No SK bind — it drives the local
+// Wyoming satellite's PTT directly (like @audio_mute is panel-local).
+lv_obj_t* build_voice(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
+  (void)err;
+  const Colors colors = parse_colors(spec);
+  const char* caption = spec["label"] | "TALK";
+
+  lv_obj_t* root = lv_obj_create(ctx.parent);
+  apply_geometry(root, spec);
+  lv_obj_set_style_bg_color(root, lv_color_hex(colors.bg), LV_PART_MAIN);
+  lv_obj_set_style_border_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_outline_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_shadow_width(root, 0, LV_PART_MAIN);
+  lv_obj_set_style_radius(root, 6, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(root, 8, LV_PART_MAIN);
+  lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* lbl = lv_label_create(root);
+  lv_obj_set_style_text_color(lbl, lv_color_hex(colors.fg), LV_PART_MAIN);
+  lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, LV_PART_MAIN);
+  lv_label_set_text(lbl, caption);
+  lv_obj_center(lbl);
+
+  auto* vc = new VoiceCtx{root, lbl, nullptr, -1};
+  lv_obj_set_user_data(root, vc);
+
+  // Press → trigger PTT (only meaningful when idle/connected).
+  lv_obj_add_event_cb(
+      root,
+      [](lv_event_t* e) {
+        lv_obj_set_style_bg_opa(
+            static_cast<lv_obj_t*>(lv_event_get_target(e)), LV_OPA_70,
+            LV_PART_MAIN);
+        voice().trigger_ptt();
+      },
+      LV_EVENT_PRESSED, nullptr);
+  lv_obj_add_event_cb(
+      root,
+      [](lv_event_t* e) {
+        lv_obj_set_style_bg_opa(
+            static_cast<lv_obj_t*>(lv_event_get_target(e)), LV_OPA_COVER,
+            LV_PART_MAIN);
+      },
+      LV_EVENT_RELEASED, nullptr);
+
+  // Poll the satellite state ~4 Hz on the event_loop (LVGL) task and update
+  // the caption/colour: LISTENING (green) while streaming mic, "…" when the
+  // orchestrator is disconnected, else the caption.
+  vc->timer = lv_timer_create(
+      [](lv_timer_t* t) {
+        auto* c = static_cast<VoiceCtx*>(lv_timer_get_user_data(t));
+        int s = voice().state_code();
+        if (s == c->last) return;
+        c->last = s;
+        switch (s) {
+          case 2:  // listening
+            lv_label_set_text(c->label, "LISTENING");
+            lv_obj_set_style_text_color(c->label, lv_color_hex(0x33cc66),
+                                        LV_PART_MAIN);
+            break;
+          case 0:  // disconnected
+            lv_label_set_text(c->label, "\xE2\x80\xA6");  // …
+            lv_obj_set_style_text_color(c->label, lv_color_hex(0x888888),
+                                        LV_PART_MAIN);
+            break;
+          default:  // idle / speaking
+            lv_label_set_text(c->label, "TALK");
+            lv_obj_set_style_text_color(c->label, lv_color_white(),
+                                        LV_PART_MAIN);
+            break;
+        }
+      },
+      250, vc);
+
+  lv_obj_add_event_cb(
+      root,
+      [](lv_event_t* e) {
+        auto* c = static_cast<VoiceCtx*>(lv_obj_get_user_data(
+            static_cast<lv_obj_t*>(lv_event_get_target(e))));
+        if (c->timer) lv_timer_delete(c->timer);
+        delete c;
+      },
+      LV_EVENT_DELETE, nullptr);
+
+  return root;
+}
+
 lv_obj_t* build_widget(BuildCtx& ctx, JsonObjectConst spec,
                        std::string* err) {
   const char* type = spec["type"] | (const char*)nullptr;
@@ -2216,6 +2316,7 @@ lv_obj_t* build_widget(BuildCtx& ctx, JsonObjectConst spec,
   if (t == "notifications") return build_notifications(ctx, spec, err);
   if (t == "anchor")   return build_anchor(ctx, spec, err);
   if (t == "anchor_track") return build_anchor_track(ctx, spec, err);
+  if (t == "voice")    return build_voice(ctx, spec, err);
   *err = std::string("unknown widget kind: ") + t;
   return nullptr;
 }
