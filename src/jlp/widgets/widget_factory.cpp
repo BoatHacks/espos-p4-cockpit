@@ -2203,12 +2203,16 @@ lv_obj_t* build_anchor_track(BuildCtx& ctx, JsonObjectConst spec,
 }  // namespace
 
 namespace {
-// Per-widget context for the voice mic button: the label + a poll timer that
-// reflects the satellite state (0 disc / 1 idle / 2 listening / 3 speaking).
+// Per-widget context for the voice mic button: a poll timer that reflects the
+// satellite state (0 disc / 1 idle / 2 listening / 3 speaking). idle_text /
+// idle_fg are the widget's configured label + colour, restored on the idle
+// state so a custom label/fg_color isn't stomped by the state indicator.
 struct VoiceCtx {
   lv_obj_t* root;
   lv_obj_t* label;
   lv_timer_t* timer;
+  std::string idle_text;
+  uint32_t idle_fg;
   int last = -1;
 };
 }  // namespace
@@ -2237,7 +2241,7 @@ lv_obj_t* build_voice(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   lv_label_set_text(lbl, caption);
   lv_obj_center(lbl);
 
-  auto* vc = new VoiceCtx{root, lbl, nullptr, -1};
+  auto* vc = new VoiceCtx{root, lbl, nullptr, caption, colors.fg, -1};
   lv_obj_set_user_data(root, vc);
 
   // Press → trigger PTT (only meaningful when idle/connected).
@@ -2279,9 +2283,9 @@ lv_obj_t* build_voice(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
             lv_obj_set_style_text_color(c->label, lv_color_hex(0x888888),
                                         LV_PART_MAIN);
             break;
-          default:  // idle / speaking
-            lv_label_set_text(c->label, "TALK");
-            lv_obj_set_style_text_color(c->label, lv_color_white(),
+          default:  // idle / speaking — restore the widget's own label + fg
+            lv_label_set_text(c->label, c->idle_text.c_str());
+            lv_obj_set_style_text_color(c->label, lv_color_hex(c->idle_fg),
                                         LV_PART_MAIN);
             break;
         }
