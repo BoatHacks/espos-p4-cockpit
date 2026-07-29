@@ -439,7 +439,8 @@ constexpr const char* kWidgetCatalogJson =
       "\"button\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bind\",\"press_value\",\"release_value\",\"hold_ms\",\"bg_color\",\"fg_color\"]},"
       "\"notifications\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"max_rows\",\"row_height\",\"columns\",\"row_color_field\",\"include_cleared\",\"bg_color\",\"fg_color\"]},"
       "\"anchor\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"display\",\"fg_color\"]},"
-      "\"anchor_track\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"display\",\"fg_color\"]}"
+      "\"anchor_track\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"display\",\"fg_color\"]},"
+      "\"voice\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bg_color\",\"fg_color\"]}"
     "}";
 
 esp_err_t hello_get(httpd_req_t* req) {

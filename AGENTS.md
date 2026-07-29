@@ -231,5 +231,3 @@ designer refuses to push widget kinds the device doesn't advertise.
 - List widget v2: vessels.\* iterator for AIS.
 - Alert overlay `ack_method: "toast"`.
 - LVGL-WASM pixel-perfect preview.
-- Voice/AI widget over the audio sink (the `AudioDriver::play_pcm`
-  path exists; the TTS/mic feed does not).
