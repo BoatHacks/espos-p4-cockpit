@@ -44,9 +44,15 @@ void VoiceControl::set_volume(uint8_t pct) {
 }
 
 void VoiceControl::set_mic_muted(bool muted) {
-  mic_muted_ = muted;
-  // If we're muted mid-utterance, drop the current PTT hold immediately.
-  if (muted && sat_) sat_->set_ptt_held(false);
+  // Publish the muted state FIRST, then purge, so any concurrent /mic_probe
+  // sees "muted" and the satellite's own probe kill switch (set by
+  // wake_pcm_clear) blocks the snapshot regardless of timing — the two gates
+  // together close the check-then-read window.
+  mic_muted_.store(muted);
+  if (muted && sat_) {
+    sat_->set_ptt_held(false);
+    sat_->wake_pcm_clear();  // sets the lock-free probe-disable kill switch
+  }
 }
 
 VoiceControl& voice() {
