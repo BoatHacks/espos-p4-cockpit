@@ -196,6 +196,40 @@ esp_err_t mic_probe_get(httpd_req_t* req) {
   return ESP_OK;
 }
 
+// GET /mic_probe4 — measure RMS + peak of all four ES7210 mic inputs to find
+// which one(s) carry a live mic. Diagnostic for the undocumented board wiring:
+// speak while calling it; whichever channels track speech are the real mics.
+esp_err_t mic_probe4_get(httpd_req_t* req) {
+  if (!g_wyoming) {
+    httpd_resp_set_status(req, "503 Service Unavailable");
+    httpd_resp_sendstr(req, "no satellite");
+    return ESP_OK;
+  }
+  if (voice().mic_muted()) {
+    httpd_resp_set_status(req, "403 Forbidden");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_sendstr(req, "mic muted");
+    return ESP_OK;
+  }
+  sensesp_cockpit_display::AudioDriver::MicLevels lv;
+  if (!g_wyoming->probe_mic_levels(lv)) {
+    httpd_resp_set_status(req, "503 Service Unavailable");
+    httpd_resp_sendstr(req, "no mic probe on this board");
+    return ESP_OK;
+  }
+  char body[256];
+  int n = snprintf(
+      body, sizeof(body),
+      "{\"rms\":[%u,%u,%u,%u],\"peak\":[%u,%u,%u,%u],"
+      "\"note\":\"index 0..3 = ES7210 MIC1..MIC4; live mic tracks speech\"}",
+      lv.rms[0], lv.rms[1], lv.rms[2], lv.rms[3], lv.peak[0], lv.peak[1],
+      lv.peak[2], lv.peak[3]);
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  httpd_resp_send(req, body, n);
+  return ESP_OK;
+}
+
 // --- screenshot endpoint -------------------------------------------------
 //
 // GET /screenshot                — JPEG (default; cheap enough for the
@@ -584,7 +618,7 @@ void http_api_start(uint16_t port) {
   config.recv_wait_timeout = 120;
   config.send_wait_timeout = 30;
   config.lru_purge_enable = true;
-  config.max_uri_handlers = 6;
+  config.max_uri_handlers = 8;
 
   httpd_handle_t server = nullptr;
   if (httpd_start(&server, &config) != ESP_OK) {
@@ -639,6 +673,14 @@ void http_api_start(uint16_t port) {
       .user_ctx = nullptr,
   };
   httpd_register_uri_handler(server, &mic_probe_uri);
+
+  httpd_uri_t mic_probe4_uri = {
+      .uri = "/mic_probe4",
+      .method = HTTP_GET,
+      .handler = mic_probe4_get,
+      .user_ctx = nullptr,
+  };
+  httpd_register_uri_handler(server, &mic_probe4_uri);
 
   ESP_LOGI(
       TAG,
