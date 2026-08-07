@@ -92,16 +92,36 @@ void setup() {
   // START it only after the network stack is up (see below) — its TCP
   // server calls socket()/bind(), which assert against lwIP if run before
   // SensESPAppBuilder brings WiFi/lwIP online.
-  // Hands-free wake word: ON-DEVICE (esp-sr AFE + WakeNet). The detector runs
-  // on the panel from the raw mic — its front-end is built for far-field
-  // embedded mics, unlike a remote openWakeWord (which scored this panel's mic
-  // near zero). The word is chosen in sdkconfig (CONFIG_SR_WN_WN9_HIESP ->
-  // "Hi ESP") and flashed to the "model" partition; no wake_host / network
-  // stream. This P4 rev links the esp32p4_less_v3 esp-sr lib, which supports
-  // the wn9 (v1h24) models like hiesp — NOT the newer wn9l Jarvis. Tap-to-talk
-  // still works too.
+  // Hands-free wake word. Two modes, both verified on hardware:
+  //
+  // DEFAULT — ON-DEVICE (esp-sr AFE + WakeNet). The detector runs on the panel
+  // from the raw mic. The word is chosen in sdkconfig (CONFIG_SR_WN_WN9_HIESP
+  // -> "Hi ESP") and flashed to the "model" partition; no network stream. This
+  // P4 rev links the esp32p4_less_v3 esp-sr lib, which supports the wn9
+  // (v1h24) models like hiesp — NOT the newer wn9l Jarvis.
+  //
+  // JLP_NETWORK_WAKE — stream the mic to signalk-openwakeword instead, which
+  // accepts any custom-trained model (no model partition reflash). Earlier
+  // notes here claimed openWakeWord "scored this panel's mic near zero"; that
+  // was the shared-I2S capture-clock bug, not the detector — after a TTS reply
+  // the mic ran at 22050 Hz while capture_rate() still advertised 16 kHz, so
+  // the server resampled against a false label. Fixed in the display HAL.
+  //
+  // Tap-to-talk works in both modes.
   sensesp_wyoming::WyomingSatelliteConfig wy_cfg;
+#ifdef JLP_NETWORK_WAKE
+  // Network wake: stream the mic to signalk-openwakeword instead of running
+  // WakeNet locally. Lets the boat pick any custom-trained word (e.g.
+  // "hey moin") without reflashing a model partition. The detect list MUST
+  // name the word — an empty list makes openWakeWord fall back to its own
+  // default model and silently ignore the one we want.
+  wy_cfg.on_device_wake = false;
+  wy_cfg.wake_host = JLP_NETWORK_WAKE_HOST;
+  wy_cfg.wake_port = 10400;
+  wy_cfg.wake_words = {JLP_NETWORK_WAKE_WORD};
+#else
   wy_cfg.on_device_wake = true;
+#endif
   wy_cfg.wake_input_gain = 6;  // mic quiet (~665 raw); x6 into WakeNet range
   wy_cfg.wake_threshold = 0.45f;
   wy_cfg.mic_stream_gain = 3;  // lift STT stream past the endpointer RMS floor

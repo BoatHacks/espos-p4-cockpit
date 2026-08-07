@@ -189,6 +189,16 @@ esp_err_t mic_probe_get(httpd_req_t* req) {
   httpd_resp_set_type(req, "audio/wav");
   // Don't let mic audio linger in caches/proxies.
   httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  // Age of the newest sample in the ring. MUST be checked by anything doing
+  // offline analysis: the ring is only fed while the wake loop streams, so it
+  // FREEZES when capture stops and keeps serving the same bytes. Repeated
+  // requests then return byte-identical WAVs that look like real recordings.
+  // static: httpd_resp_set_hdr stores the POINTER, it does not copy, so the
+  // buffer must outlive the response. Single-threaded httpd, so this is safe.
+  static char age_buf[16];
+  const uint32_t age = g_wyoming->wake_pcm_age_ms();
+  snprintf(age_buf, sizeof(age_buf), "%lu", (unsigned long)age);
+  httpd_resp_set_hdr(req, "X-Mic-Age-Ms", age_buf);
   httpd_resp_send_chunk(req, (const char*)hdr, sizeof(hdr));
   httpd_resp_send_chunk(req, (const char*)pcm, data_bytes);
   httpd_resp_send_chunk(req, nullptr, 0);
@@ -199,6 +209,50 @@ esp_err_t mic_probe_get(httpd_req_t* req) {
 // GET /mic_probe4 — measure RMS + peak of all four ES7210 mic inputs to find
 // which one(s) carry a live mic. Diagnostic for the undocumented board wiring:
 // speak while calling it; whichever channels track speech are the real mics.
+// GET /mic_gain            — report the analog mic preamp gain
+// GET /mic_gain?db=30      — set it, then reopen the capture so it takes effect
+//
+// Diagnostic for wake-word audio quality. The PGA was pinned at the driver's
+// 37.5 dB ceiling to fight a quiet mic, but that badly distorts speech
+// ("like a long metal tube, barely any dynamic") and a wake model then scores
+// the audio the same as silence. The right value is empirical, so sweep it.
+// get_db() quantises: 3 dB steps to 33, then 34.5 / 36 / 37.5.
+esp_err_t mic_gain_get(httpd_req_t* req) {
+  if (!g_wyoming || !g_wyoming->audio()) {
+    httpd_resp_set_status(req, "503 Service Unavailable");
+    httpd_resp_sendstr(req, "no audio");
+    return ESP_OK;
+  }
+  auto* audio = g_wyoming->audio();
+  char q[64];
+  if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
+    char val[16];
+    if (httpd_query_key_value(q, "db", val, sizeof(val)) == ESP_OK) {
+      const float db = strtof(val, nullptr);
+      if (db < 0.0f || db > 37.5f) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_sendstr(req, "db must be 0..37.5");
+        return ESP_OK;
+      }
+      audio->set_mic_gain_db(db);
+      // The gain is applied at capture open, so cycle the capture to adopt it.
+      // The wake loop holds a reference, hence stop-then-start rather than a
+      // bare open: the refcount must go to zero for the ADC to actually close.
+      audio->stop_capture();
+      audio->start_capture();
+    }
+  }
+  char body[96];
+  const int n = snprintf(body, sizeof(body),
+                         "{\"mic_gain_db\":%.1f,\"note\":\"applied on capture "
+                         "reopen; get_db quantises\"}",
+                         audio->mic_gain_db());
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  httpd_resp_send(req, body, n);
+  return ESP_OK;
+}
+
 esp_err_t mic_probe4_get(httpd_req_t* req) {
   if (!g_wyoming) {
     httpd_resp_set_status(req, "503 Service Unavailable");
@@ -681,6 +735,14 @@ void http_api_start(uint16_t port) {
       .user_ctx = nullptr,
   };
   httpd_register_uri_handler(server, &mic_probe4_uri);
+
+  httpd_uri_t mic_gain_uri = {
+      .uri = "/mic_gain",
+      .method = HTTP_GET,
+      .handler = mic_gain_get,
+      .user_ctx = nullptr,
+  };
+  httpd_register_uri_handler(server, &mic_gain_uri);
 
   ESP_LOGI(
       TAG,
