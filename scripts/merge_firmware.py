@@ -43,14 +43,24 @@ def main() -> int:
     # app image becomes firmware.bin at the build-dir root — see
     # ota.sh, which already flashes .pio/build/<env>/firmware.bin).
     # Resolve by role instead of trusting the manifest's exact path.
+    #
+    # ota_data_initial.bin and srmodels.bin (the esp-sr WakeNet model
+    # partition) aren't produced by a plain `pio run` at all — they need
+    # extra build steps this workflow doesn't run. Both are safe to skip
+    # on a first flash: an unwritten otadata partition reads as all-0xFF,
+    # which ESP-IDF's bootloader treats as "boot the first OTA slot".
     by_basename = {p.name: p for p in all_files}
-    role_overrides = {
+    mandatory_roles = {
         "bootloader": "bootloader.bin",
         "partition": "partitions.bin",
+    }
+    optional_roles = {
         "ota_data": "ota_data_initial.bin",
+        "srmodels": "srmodels.bin",
+        "model": "srmodels.bin",
     }
 
-    def resolve(rel_path: str) -> Path:
+    def resolve(rel_path: str) -> Path | None:
         direct = args.build_dir / rel_path
         if direct.is_file():
             return direct
@@ -58,15 +68,22 @@ def main() -> int:
         if found is not None:
             return found
         lower = rel_path.lower()
-        for keyword, override_name in role_overrides.items():
-            if keyword in lower and override_name in by_basename:
-                return by_basename[override_name]
-        # Anything left unmatched (no bootloader/partition/ota_data
-        # keyword) is the main app image.
+        for keyword, override_name in mandatory_roles.items():
+            if keyword in lower:
+                if override_name in by_basename:
+                    return by_basename[override_name]
+                print(f"error: could not locate '{rel_path}' (role: {keyword}) "
+                      f"anywhere under {args.build_dir}", file=sys.stderr)
+                sys.exit(1)
+        for keyword, override_name in optional_roles.items():
+            if keyword in lower:
+                return by_basename.get(override_name)
+        # Anything left unmatched (no bootloader/partition/ota_data/
+        # srmodels keyword) is the main app image — mandatory.
         if "firmware.bin" in by_basename:
             return by_basename["firmware.bin"]
-        print(f"error: could not locate '{rel_path}' anywhere under {args.build_dir}",
-              file=sys.stderr)
+        print(f"error: could not locate '{rel_path}' (app image) "
+              f"anywhere under {args.build_dir}", file=sys.stderr)
         sys.exit(1)
 
     cmd = [
@@ -77,7 +94,11 @@ def main() -> int:
         "--flash_size", flash_settings["flash_size"],
     ]
     for offset, rel_path in sorted(flash_files.items(), key=lambda kv: int(kv[0], 16)):
-        cmd += [offset, str(resolve(rel_path))]
+        resolved = resolve(rel_path)
+        if resolved is None:
+            print(f"skipping {offset} ({rel_path}): not produced by this build")
+            continue
+        cmd += [offset, str(resolved)]
 
     print("+", " ".join(cmd))
     subprocess.run(cmd, check=True)
