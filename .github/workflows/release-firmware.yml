@@ -61,17 +61,17 @@ jobs:
           python scripts/merge_firmware.py \
             --build-dir .pio/build/p4_cockpit \
             --chip esp32p4 \
-            --out sensesp-p4-cockpit-${{ github.event.release.tag_name || github.sha }}-merged.bin
+            --out sensesp-p4-cockpit-merged.bin
 
       - name: Upload merged binary to the release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: sensesp-p4-cockpit/*-merged.bin
+          files: sensesp-p4-cockpit/sensesp-p4-cockpit-merged.bin
 
       - name: Upload build artifact
         if: github.event_name != 'release'
         uses: actions/upload-artifact@v4
         with:
           name: merged-firmware
-          path: sensesp-p4-cockpit/*-merged.bin
+          path: sensesp-p4-cockpit/sensesp-p4-cockpit-merged.bin
