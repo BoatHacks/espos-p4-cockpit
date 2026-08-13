@@ -31,6 +31,23 @@ def main() -> int:
     flash_settings = flasher_args["flash_settings"]
     flash_files = flasher_args["flash_files"]
 
+    # PlatformIO's espidf build doesn't always mirror idf.py's nested
+    # build/bootloader/, build/partition_table/ layout that
+    # flasher_args.json's paths assume — fall back to a basename search
+    # under build-dir for anything not where the manifest says it is.
+    by_basename = {p.name: p for p in args.build_dir.rglob("*") if p.is_file()}
+
+    def resolve(rel_path: str) -> Path:
+        direct = args.build_dir / rel_path
+        if direct.is_file():
+            return direct
+        found = by_basename.get(Path(rel_path).name)
+        if found is None:
+            print(f"error: could not locate '{rel_path}' anywhere under {args.build_dir}",
+                  file=sys.stderr)
+            sys.exit(1)
+        return found
+
     cmd = [
         "esptool.py", "--chip", args.chip, "merge_bin",
         "-o", str(args.out),
@@ -39,7 +56,7 @@ def main() -> int:
         "--flash_size", flash_settings["flash_size"],
     ]
     for offset, rel_path in sorted(flash_files.items(), key=lambda kv: int(kv[0], 16)):
-        cmd += [offset, str(args.build_dir / rel_path)]
+        cmd += [offset, str(resolve(rel_path))]
 
     print("+", " ".join(cmd))
     subprocess.run(cmd, check=True)
