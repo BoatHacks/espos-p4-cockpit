@@ -1,0 +1,77 @@
+name: Release merged firmware
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out sensesp-p4-cockpit
+        uses: actions/checkout@v4
+        with:
+          path: sensesp-p4-cockpit
+
+      # platformio.ini pulls these in as symlink:// lib_deps, so they
+      # must land as siblings of sensesp-p4-cockpit on disk.
+      - name: Check out sensesp-cockpit-display
+        uses: actions/checkout@v4
+        with:
+          repository: dirkwa/sensesp-cockpit-display
+          path: sensesp-cockpit-display
+
+      - name: Check out sensesp-n2k-gateway
+        uses: actions/checkout@v4
+        with:
+          repository: dirkwa/sensesp-n2k-gateway
+          path: sensesp-n2k-gateway
+
+      - name: Check out sensesp-ble-gateway
+        uses: actions/checkout@v4
+        with:
+          repository: dirkwa/sensesp-ble-gateway
+          path: sensesp-ble-gateway
+
+      - name: Check out sensesp-wyoming-satellite
+        uses: actions/checkout@v4
+        with:
+          repository: dirkwa/sensesp-wyoming-satellite
+          path: sensesp-wyoming-satellite
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PlatformIO + esptool
+        run: pip install -U platformio esptool
+
+      - name: Build firmware (p4_cockpit)
+        working-directory: sensesp-p4-cockpit
+        run: pio run -e p4_cockpit
+
+      - name: Merge flash images into one binary
+        working-directory: sensesp-p4-cockpit
+        run: |
+          python scripts/merge_firmware.py \
+            --build-dir .pio/build/p4_cockpit \
+            --chip esp32p4 \
+            --out sensesp-p4-cockpit-merged.bin
+
+      - name: Upload merged binary to the release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: sensesp-p4-cockpit/sensesp-p4-cockpit-merged.bin
+
+      - name: Upload build artifact
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: merged-firmware
+          path: sensesp-p4-cockpit/sensesp-p4-cockpit-merged.bin
