@@ -67,8 +67,10 @@ jobs:
 
       # Pinned: esptool 5 renamed merge_bin -> merge-bin and dropped the
       # esptool.py entry point, so an unpinned install breaks this silently.
+      # PlatformIO must stay >= 6.1.18 — the pioarduino platform refuses to
+      # install on older cores.
       - name: Install PlatformIO + esptool
-        run: pip install "platformio==6.1.16" "esptool==4.8.1"
+        run: pip install "platformio==6.1.19" "esptool==4.8.1"
 
       - name: Build firmware (p4_cockpit)
         working-directory: sensesp-p4-cockpit
