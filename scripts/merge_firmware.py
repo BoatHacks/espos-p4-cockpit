@@ -31,22 +31,43 @@ def main() -> int:
     flash_settings = flasher_args["flash_settings"]
     flash_files = flasher_args["flash_files"]
 
-    # PlatformIO's espidf build doesn't always mirror idf.py's nested
-    # build/bootloader/, build/partition_table/ layout that
-    # flasher_args.json's paths assume — fall back to a basename search
-    # under build-dir for anything not where the manifest says it is.
-    by_basename = {p.name: p for p in args.build_dir.rglob("*") if p.is_file()}
+    all_files = [p for p in args.build_dir.rglob("*") if p.is_file()]
+    print(f"files under {args.build_dir}:")
+    for p in sorted(all_files):
+        print(" ", p.relative_to(args.build_dir))
+
+    # flasher_args.json's paths mirror idf.py's own build/bootloader/,
+    # build/partition_table/ layout and filenames, but PlatformIO's
+    # espidf build reorganizes and renames those outputs (bootloader.bin
+    # stays put, but the partition table becomes partitions.bin and the
+    # app image becomes firmware.bin at the build-dir root — see
+    # ota.sh, which already flashes .pio/build/<env>/firmware.bin).
+    # Resolve by role instead of trusting the manifest's exact path.
+    by_basename = {p.name: p for p in all_files}
+    role_overrides = {
+        "bootloader": "bootloader.bin",
+        "partition": "partitions.bin",
+        "ota_data": "ota_data_initial.bin",
+    }
 
     def resolve(rel_path: str) -> Path:
         direct = args.build_dir / rel_path
         if direct.is_file():
             return direct
         found = by_basename.get(Path(rel_path).name)
-        if found is None:
-            print(f"error: could not locate '{rel_path}' anywhere under {args.build_dir}",
-                  file=sys.stderr)
-            sys.exit(1)
-        return found
+        if found is not None:
+            return found
+        lower = rel_path.lower()
+        for keyword, override_name in role_overrides.items():
+            if keyword in lower and override_name in by_basename:
+                return by_basename[override_name]
+        # Anything left unmatched (no bootloader/partition/ota_data
+        # keyword) is the main app image.
+        if "firmware.bin" in by_basename:
+            return by_basename["firmware.bin"]
+        print(f"error: could not locate '{rel_path}' anywhere under {args.build_dir}",
+              file=sys.stderr)
+        sys.exit(1)
 
     cmd = [
         "esptool.py", "--chip", args.chip, "merge_bin",
