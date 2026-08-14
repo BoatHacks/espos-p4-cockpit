@@ -124,6 +124,25 @@ nc <device-ip> 2323                    # remote log stream
 
 Target: `esp32-p4`, 16 MB flash, PSRAM enabled, LittleFS partition. See [platformio.ini](platformio.ini).
 
+## Which wake word you get depends on the env you build
+
+The hands-free wake word is **chosen at build time**, and the two envs listen for different words. Building the wrong one is silent — the panel comes up healthy, streams audio, and simply never wakes.
+
+| Env | Wake runs | Word | Needs |
+|---|---|---|---|
+| `p4_cockpit` (default) | on-device (esp-sr WakeNet) | **"Hi ESP"** | the `model` partition flashed |
+| `p4_cockpit_netwake` | [signalk-openwakeword](https://github.com/dirkwa/signalk-openwakeword) over the network | whatever the server loads, e.g. **"hey moin"** | that plugin running and reachable |
+
+**The released `sensesp-p4-cockpit-merged.bin` is the default env**, so a browser-flashed panel listens for *"Hi ESP"*, not a custom word. For a custom word, build and flash the netwake env yourself:
+
+```bash
+pio run -e p4_cockpit_netwake -t upload
+```
+
+Its host/word are compile-time flags in [platformio.ini](platformio.ini) (`JLP_NETWORK_WAKE_HOST`, `JLP_NETWORK_WAKE_WORD`); point them at your SignalK server and the model name the plugin serves. The name must match a model the plugin actually loads — an empty or unknown detect list makes openWakeWord silently fall back to its own default model.
+
+`GET /hello` reports which mode is live under `wake`: `on_device` tells the two apart, and on the network path `chunks` climbing proves the mic is reaching the detector (both stay `0` on-device by design).
+
 The firmware depends on released [SensESP](https://github.com/SignalK/SensESP) `>= 3.5.0` (pinned in [platformio.ini](platformio.ini)). The WS meta stream (`sendMeta=all` + `SKMetadataListener`) — how widgets learn zone definitions for color tinting — and the `SKPrefixListener` the notifications registry uses are all in that release.
 
 ## Flashing without installing PlatformIO (browser-based)
