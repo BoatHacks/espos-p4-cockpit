@@ -18,8 +18,9 @@ void mdns_announce_start(uint16_t api_port) {
           // http_api.cpp. mDNS browsers use these for capability
           // discovery before falling back to a real /hello fetch.
           {"schema",   "1"},
-          {"widgets",  "label,value,toggle,arc,bar,bargroup,button,notifications"},
-          {"firmware", "p4-cockpit-jlp-0.1.5"},
+          {"widgets",  "label,value,toggle,arc,bar,bargroup,button,notifications,"
+                       "anchor,anchor_track,voice,mute_speaker,mute_mic,volume"},
+          {"firmware", "p4-cockpit-jlp-0.2.0"},
           {"api",      "/layout,/hello,/healthz,/screenshot"},
       };
       esp_err_t err = mdns_service_add(

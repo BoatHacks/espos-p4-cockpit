@@ -612,7 +612,7 @@ esp_err_t hello_get(httpd_req_t* req) {
   resp["schema"] = 1;
   resp["name"] = name;
   resp["hostname"] = "p4-cockpit";
-  resp["firmware"] = "p4-cockpit-jlp-0.1.5";
+  resp["firmware"] = "p4-cockpit-jlp-0.2.0";
   resp["store"] = jlp::store_boot_report();  // persistence backend status
   JsonObject display = resp["display"].to<JsonObject>();
   // Report the live panel geometry from the active board HAL so the
