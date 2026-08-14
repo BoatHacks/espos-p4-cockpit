@@ -8,9 +8,33 @@ partition table + bootloader actually need.
 """
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+
+def find_packaged_srmodels(chip: str) -> Path | None:
+    """Locate the prebuilt srmodels.bin shipped with the framework.
+
+    `pio run` never runs esp-sr's movemodel.py, so the WakeNet model
+    partition is not among the build outputs. pioarduino ships a
+    prepacked srmodels.bin per chip variant instead; the esp32p4 and
+    esp32p4_es copies are byte-identical, so either satisfies both
+    silicon revisions.
+    """
+    root = Path(
+        os.environ.get("PLATFORMIO_CORE_DIR", Path.home() / ".platformio")
+    ) / "packages" / "framework-arduinoespressif32-libs"
+    if not root.is_dir():
+        return None
+    # Prefer the exact chip dir, then its variant spellings (esp32p4_es).
+    candidates = [root / chip / "esp_sr" / "srmodels.bin"]
+    candidates += sorted(root.glob(f"{chip}_*/esp_sr/srmodels.bin"))
+    for c in candidates:
+        if c.is_file():
+            return c
+    return None
 
 
 def main() -> int:
@@ -19,6 +43,10 @@ def main() -> int:
                          help="e.g. .pio/build/p4_cockpit")
     parser.add_argument("--chip", required=True, help="e.g. esp32p4")
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument(
+        "--require-model", action="store_true",
+        help="fail if the esp-sr model image can't be found (use when the "
+             "build has CONFIG_MODEL_IN_FLASH=y and on-device wake enabled)")
     args = parser.parse_args()
 
     flasher_args_path = args.build_dir / "flasher_args.json"
@@ -46,10 +74,25 @@ def main() -> int:
     #
     # ota_data_initial.bin and srmodels.bin (the esp-sr WakeNet model
     # partition) aren't produced by a plain `pio run` at all — they need
-    # extra build steps this workflow doesn't run. Both are safe to skip
-    # on a first flash: an unwritten otadata partition reads as all-0xFF,
-    # which ESP-IDF's bootloader treats as "boot the first OTA slot".
+    # extra build steps this workflow doesn't run.
+    #
+    # Skipping otadata is harmless: an unwritten otadata partition reads
+    # as all-0xFF, which ESP-IDF's bootloader treats as "boot the first
+    # OTA slot".
+    #
+    # Skipping the model is NOT harmless — the default env runs on-device
+    # WakeNet (CONFIG_SR_WN_WN9_HIESP + CONFIG_MODEL_IN_FLASH), so an
+    # empty "model" partition means the wake word is silently dead on a
+    # freshly flashed board, and OTA can't repair it (it writes the app
+    # slot only). Fall back to the framework's prepacked srmodels.bin,
+    # and under --require-model treat a miss as a hard error rather than
+    # shipping a release binary with no wake word.
     by_basename = {p.name: p for p in all_files}
+    packaged_srmodels = find_packaged_srmodels(args.chip)
+    if packaged_srmodels is not None and "srmodels.bin" not in by_basename:
+        print(f"using packaged model image: {packaged_srmodels}")
+        by_basename["srmodels.bin"] = packaged_srmodels
+
     mandatory_roles = {
         "bootloader": "bootloader.bin",
         "partition": "partitions.bin",
@@ -96,6 +139,14 @@ def main() -> int:
     for offset, rel_path in sorted(flash_files.items(), key=lambda kv: int(kv[0], 16)):
         resolved = resolve(rel_path)
         if resolved is None:
+            is_model = "srmodels" in rel_path.lower() or "model" in rel_path.lower()
+            if is_model and args.require_model:
+                print(f"error: --require-model was given but the esp-sr model "
+                      f"image for '{rel_path}' was found neither under "
+                      f"{args.build_dir} nor in the installed framework "
+                      f"packages. Merging without it would produce a binary "
+                      f"whose on-device wake word is dead.", file=sys.stderr)
+                return 1
             print(f"skipping {offset} ({rel_path}): not produced by this build")
             continue
         cmd += [offset, str(resolved)]

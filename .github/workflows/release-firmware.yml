@@ -4,74 +4,171 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      libs-ref:
+        description: >-
+          Git ref to check the sister libs out at (branch, tag, or SHA).
+          Empty uses each repo's default branch. Pin this to reproduce an
+          older release's exact firmware.
+        required: false
+        default: ""
+  # Also a build gate: the sister libs are symlinked, so a break here
+  # would otherwise stay hidden until a release is cut.
+  pull_request:
+  push:
+    branches: [master]
 
+# Least privilege by default. Only the release-upload job below widens
+# this to `contents: write`; the build job compiles four external
+# checkouts, so it must not hold a writable token.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Check out sensesp-p4-cockpit
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
+          persist-credentials: false
           path: sensesp-p4-cockpit
 
       # platformio.ini pulls these in as symlink:// lib_deps, so they
       # must land as siblings of sensesp-p4-cockpit on disk.
       - name: Check out sensesp-cockpit-display
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
+          persist-credentials: false
           repository: dirkwa/sensesp-cockpit-display
+          ref: ${{ inputs.libs-ref }}
           path: sensesp-cockpit-display
 
       - name: Check out sensesp-n2k-gateway
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
+          persist-credentials: false
           repository: dirkwa/sensesp-n2k-gateway
+          ref: ${{ inputs.libs-ref }}
           path: sensesp-n2k-gateway
 
       - name: Check out sensesp-ble-gateway
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
+          persist-credentials: false
           repository: dirkwa/sensesp-ble-gateway
+          ref: ${{ inputs.libs-ref }}
           path: sensesp-ble-gateway
 
       - name: Check out sensesp-wyoming-satellite
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
+          persist-credentials: false
           repository: dirkwa/sensesp-wyoming-satellite
+          ref: ${{ inputs.libs-ref }}
           path: sensesp-wyoming-satellite
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
 
+      # Pinned: esptool 5 renamed merge_bin -> merge-bin and dropped the
+      # esptool.py entry point, so an unpinned install breaks this silently.
+      # PlatformIO must stay >= 6.1.18 — the pioarduino platform refuses to
+      # install on older cores.
       - name: Install PlatformIO + esptool
-        run: pip install -U platformio esptool
+        run: pip install "platformio==6.1.19" "esptool==4.8.1"
 
       - name: Build firmware (p4_cockpit)
         working-directory: sensesp-p4-cockpit
         run: pio run -e p4_cockpit
 
+      # --require-model: the default env wakes on-device (WakeNet hiesp),
+      # so a merged image without the model partition would boot with a
+      # dead wake word. Fail the build instead of shipping that.
       - name: Merge flash images into one binary
         working-directory: sensesp-p4-cockpit
         run: |
           python scripts/merge_firmware.py \
             --build-dir .pio/build/p4_cockpit \
             --chip esp32p4 \
+            --require-model \
             --out sensesp-p4-cockpit-merged.bin
 
-      - name: Upload merged binary to the release
-        if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: sensesp-p4-cockpit/sensesp-p4-cockpit-merged.bin
+      # Guard against a silently-truncated or partial merge. merge_bin
+      # writes payloads, not whole partitions, so the image legitimately
+      # ends at the model payload's end rather than the partition's —
+      # assert that exact length instead of a bare lower bound.
+      - name: Verify merged binary
+        working-directory: sensesp-p4-cockpit
+        run: |
+          python - <<'PY'
+          import sys
+          from pathlib import Path
 
+          MODEL_OFFSET = 0xE10000  # "model" partition start in p4_16mb.csv
+
+          img = Path("sensesp-p4-cockpit-merged.bin")
+          data = img.read_bytes()
+          size = len(data)
+          print(f"{img}: {size} bytes ({size / 1024 / 1024:.2f} MiB)")
+
+          # Bootloader lands at 0x2000 for the P4 and starts with 0xE9.
+          if data[0x2000] != 0xE9:
+              sys.exit(f"error: no ESP image magic at 0x2000 "
+                       f"(got {data[0x2000]:#04x})")
+
+          # The model is merged last, so the image must run past its offset
+          # and end exactly where the srmodels payload ends. A short read or
+          # a partial write would land anywhere but there.
+          srmodels = next(iter(sorted(
+              Path.home().glob(
+                  ".platformio/packages/framework-arduinoespressif32-libs/"
+                  "esp32p4*/esp_sr/srmodels.bin"))), None)
+          if srmodels is None:
+              sys.exit("error: no packaged srmodels.bin to size-check against")
+          payload = srmodels.read_bytes()
+          expected = MODEL_OFFSET + len(payload)
+          if size != expected:
+              sys.exit(f"error: image ends at {size:#x}, expected {expected:#x} "
+                       f"({MODEL_OFFSET:#x} + {len(payload)} bytes of "
+                       f"WakeNet model) — the model was not merged intact")
+          # Length alone would pass a corrupted or substituted model, so
+          # compare the bytes actually landed at the model offset.
+          if data[MODEL_OFFSET:] != payload:
+              sys.exit(f"error: bytes at {MODEL_OFFSET:#x} do not match "
+                       f"{srmodels} — the WakeNet model is corrupt")
+          print(f"model payload intact: {len(payload)} bytes at {MODEL_OFFSET:#x} "
+                f"(byte-identical to {srmodels.name})")
+          print("merged image looks structurally sound")
+          PY
+
+      # Hand the binary to the release job (which holds the only writable
+      # token) on a release, and keep it as a downloadable artifact on a
+      # manual run. PR/push runs are a build gate only and upload nothing.
       - name: Upload build artifact
-        if: github.event_name != 'release'
-        uses: actions/upload-artifact@v4
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: merged-firmware
           path: sensesp-p4-cockpit/sensesp-p4-cockpit-merged.bin
+
+  # Separate job so `contents: write` is never in scope while compiling
+  # the four external checkouts above.
+  release:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download merged binary
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: merged-firmware
+
+      - name: Attach merged binary to the release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
+        with:
+          files: sensesp-p4-cockpit-merged.bin
