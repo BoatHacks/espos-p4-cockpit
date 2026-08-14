@@ -20,7 +20,7 @@ void mdns_announce_start(uint16_t api_port) {
           {"schema",   "1"},
           {"widgets",  "label,value,toggle,arc,bar,bargroup,button,notifications,"
                        "anchor,anchor_track,voice,mute_speaker,mute_mic,volume"},
-          {"firmware", "p4-cockpit-jlp-0.2.0"},
+          {"firmware", "p4-cockpit-jlp-0.2.1"},
           {"api",      "/layout,/hello,/healthz,/screenshot"},
       };
       esp_err_t err = mdns_service_add(
