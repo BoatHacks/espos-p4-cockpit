@@ -29,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out sensesp-p4-cockpit
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
           persist-credentials: false
           path: sensesp-p4-cockpit
@@ -37,7 +37,7 @@ jobs:
       # platformio.ini pulls these in as symlink:// lib_deps, so they
       # must land as siblings of sensesp-p4-cockpit on disk.
       - name: Check out sensesp-cockpit-display
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
           persist-credentials: false
           repository: dirkwa/sensesp-cockpit-display
@@ -45,7 +45,7 @@ jobs:
           path: sensesp-cockpit-display
 
       - name: Check out sensesp-n2k-gateway
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
           persist-credentials: false
           repository: dirkwa/sensesp-n2k-gateway
@@ -53,7 +53,7 @@ jobs:
           path: sensesp-n2k-gateway
 
       - name: Check out sensesp-ble-gateway
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
           persist-credentials: false
           repository: dirkwa/sensesp-ble-gateway
@@ -61,7 +61,7 @@ jobs:
           path: sensesp-ble-gateway
 
       - name: Check out sensesp-wyoming-satellite
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
           persist-credentials: false
           repository: dirkwa/sensesp-wyoming-satellite
@@ -69,7 +69,7 @@ jobs:
           path: sensesp-wyoming-satellite
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
 
@@ -128,13 +128,19 @@ jobs:
                   "esp32p4*/esp_sr/srmodels.bin"))), None)
           if srmodels is None:
               sys.exit("error: no packaged srmodels.bin to size-check against")
-          expected = MODEL_OFFSET + srmodels.stat().st_size
+          payload = srmodels.read_bytes()
+          expected = MODEL_OFFSET + len(payload)
           if size != expected:
               sys.exit(f"error: image ends at {size:#x}, expected {expected:#x} "
-                       f"({MODEL_OFFSET:#x} + {srmodels.stat().st_size} bytes of "
+                       f"({MODEL_OFFSET:#x} + {len(payload)} bytes of "
                        f"WakeNet model) — the model was not merged intact")
-          print(f"model payload intact: {srmodels.stat().st_size} bytes "
-                f"at {MODEL_OFFSET:#x}")
+          # Length alone would pass a corrupted or substituted model, so
+          # compare the bytes actually landed at the model offset.
+          if data[MODEL_OFFSET:] != payload:
+              sys.exit(f"error: bytes at {MODEL_OFFSET:#x} do not match "
+                       f"{srmodels} — the WakeNet model is corrupt")
+          print(f"model payload intact: {len(payload)} bytes at {MODEL_OFFSET:#x} "
+                f"(byte-identical to {srmodels.name})")
           print("merged image looks structurally sound")
           PY
 
@@ -143,7 +149,7 @@ jobs:
       # manual run. PR/push runs are a build gate only and upload nothing.
       - name: Upload build artifact
         if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: merged-firmware
           path: sensesp-p4-cockpit/sensesp-p4-cockpit-merged.bin
@@ -158,11 +164,11 @@ jobs:
       contents: write
     steps:
       - name: Download merged binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           name: merged-firmware
 
       - name: Attach merged binary to the release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           files: sensesp-p4-cockpit-merged.bin
