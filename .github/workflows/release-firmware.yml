@@ -18,8 +18,11 @@ on:
   push:
     branches: [master]
 
+# Least privilege by default. Only the release-upload job below widens
+# this to `contents: write`; the build job compiles four external
+# checkouts, so it must not hold a writable token.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -28,6 +31,7 @@ jobs:
       - name: Check out sensesp-p4-cockpit
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           path: sensesp-p4-cockpit
 
       # platformio.ini pulls these in as symlink:// lib_deps, so they
@@ -35,6 +39,7 @@ jobs:
       - name: Check out sensesp-cockpit-display
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           repository: dirkwa/sensesp-cockpit-display
           ref: ${{ inputs.libs-ref }}
           path: sensesp-cockpit-display
@@ -42,6 +47,7 @@ jobs:
       - name: Check out sensesp-n2k-gateway
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           repository: dirkwa/sensesp-n2k-gateway
           ref: ${{ inputs.libs-ref }}
           path: sensesp-n2k-gateway
@@ -49,6 +55,7 @@ jobs:
       - name: Check out sensesp-ble-gateway
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           repository: dirkwa/sensesp-ble-gateway
           ref: ${{ inputs.libs-ref }}
           path: sensesp-ble-gateway
@@ -56,6 +63,7 @@ jobs:
       - name: Check out sensesp-wyoming-satellite
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           repository: dirkwa/sensesp-wyoming-satellite
           ref: ${{ inputs.libs-ref }}
           path: sensesp-wyoming-satellite
@@ -88,15 +96,18 @@ jobs:
             --require-model \
             --out sensesp-p4-cockpit-merged.bin
 
-      # Cheap guard against a silently-truncated or partial merge: the
-      # image must start at 0x0, carry the ESP magic byte, and extend
-      # past the model partition at 0xE10000.
+      # Guard against a silently-truncated or partial merge. merge_bin
+      # writes payloads, not whole partitions, so the image legitimately
+      # ends at the model payload's end rather than the partition's —
+      # assert that exact length instead of a bare lower bound.
       - name: Verify merged binary
         working-directory: sensesp-p4-cockpit
         run: |
           python - <<'PY'
           import sys
           from pathlib import Path
+
+          MODEL_OFFSET = 0xE10000  # "model" partition start in p4_16mb.csv
 
           img = Path("sensesp-p4-cockpit-merged.bin")
           data = img.read_bytes()
@@ -107,24 +118,51 @@ jobs:
           if data[0x2000] != 0xE9:
               sys.exit(f"error: no ESP image magic at 0x2000 "
                        f"(got {data[0x2000]:#04x})")
-          # The model partition is the last thing merged in; if it were
-          # skipped the image would stop well short of its 0xE10000 offset.
-          if size <= 0xE10000:
-              sys.exit(f"error: image is {size:#x} bytes, which does not "
-                       f"reach the model partition at 0xE10000 — the "
-                       f"WakeNet model was not merged")
+
+          # The model is merged last, so the image must run past its offset
+          # and end exactly where the srmodels payload ends. A short read or
+          # a partial write would land anywhere but there.
+          srmodels = next(iter(sorted(
+              Path.home().glob(
+                  ".platformio/packages/framework-arduinoespressif32-libs/"
+                  "esp32p4*/esp_sr/srmodels.bin"))), None)
+          if srmodels is None:
+              sys.exit("error: no packaged srmodels.bin to size-check against")
+          expected = MODEL_OFFSET + srmodels.stat().st_size
+          if size != expected:
+              sys.exit(f"error: image ends at {size:#x}, expected {expected:#x} "
+                       f"({MODEL_OFFSET:#x} + {srmodels.stat().st_size} bytes of "
+                       f"WakeNet model) — the model was not merged intact")
+          print(f"model payload intact: {srmodels.stat().st_size} bytes "
+                f"at {MODEL_OFFSET:#x}")
           print("merged image looks structurally sound")
           PY
 
-      - name: Upload merged binary to the release
-        if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: sensesp-p4-cockpit/sensesp-p4-cockpit-merged.bin
-
+      # Hand the binary to the release job (which holds the only writable
+      # token) on a release, and keep it as a downloadable artifact on a
+      # manual run. PR/push runs are a build gate only and upload nothing.
       - name: Upload build artifact
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: merged-firmware
           path: sensesp-p4-cockpit/sensesp-p4-cockpit-merged.bin
+
+  # Separate job so `contents: write` is never in scope while compiling
+  # the four external checkouts above.
+  release:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download merged binary
+        uses: actions/download-artifact@v4
+        with:
+          name: merged-firmware
+
+      - name: Attach merged binary to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: sensesp-p4-cockpit-merged.bin
