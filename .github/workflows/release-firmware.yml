@@ -27,6 +27,19 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Default: wake runs on-device (esp-sr WakeNet "Hi ESP"), so the
+          # model partition must be merged in — see require-model below.
+          - env: p4_cockpit
+            require_model: true
+          # Network wake: the word is whatever signalk-openwakeword serves,
+          # so this build has no on-device model (CONFIG_SR_WN_WN9_HIESP is
+          # off in its sdkconfig) and must NOT require one.
+          - env: p4_cockpit_netwake
+            require_model: false
     steps:
       - name: Check out sensesp-p4-cockpit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
@@ -80,21 +93,21 @@ jobs:
       - name: Install PlatformIO + esptool
         run: pip install "platformio==6.1.19" "esptool==4.8.1"
 
-      - name: Build firmware (p4_cockpit)
+      - name: Build firmware (${{ matrix.env }})
         working-directory: sensesp-p4-cockpit
-        run: pio run -e p4_cockpit
+        run: pio run -e ${{ matrix.env }}
 
-      # --require-model: the default env wakes on-device (WakeNet hiesp),
-      # so a merged image without the model partition would boot with a
-      # dead wake word. Fail the build instead of shipping that.
+      # --require-model on the on-device env only: there a merged image
+      # without the model partition boots with a dead wake word, so fail
+      # rather than ship that. The netwake env has no model by design.
       - name: Merge flash images into one binary
         working-directory: sensesp-p4-cockpit
         run: |
           python scripts/merge_firmware.py \
-            --build-dir .pio/build/p4_cockpit \
+            --build-dir .pio/build/${{ matrix.env }} \
             --chip esp32p4 \
-            --require-model \
-            --out sensesp-p4-cockpit-merged.bin
+            ${{ matrix.require_model && '--require-model' || '' }} \
+            --out ${{ matrix.env }}-merged.bin
 
       # Guard against a silently-truncated or partial merge. merge_bin
       # writes payloads, not whole partitions, so the image legitimately
@@ -109,7 +122,8 @@ jobs:
 
           MODEL_OFFSET = 0xE10000  # "model" partition start in p4_16mb.csv
 
-          img = Path("sensesp-p4-cockpit-merged.bin")
+          img = Path("${{ matrix.env }}-merged.bin")
+          require_model = "${{ matrix.require_model }}" == "true"
           data = img.read_bytes()
           size = len(data)
           print(f"{img}: {size} bytes ({size / 1024 / 1024:.2f} MiB)")
@@ -118,6 +132,13 @@ jobs:
           if data[0x2000] != 0xE9:
               sys.exit(f"error: no ESP image magic at 0x2000 "
                        f"(got {data[0x2000]:#04x})")
+
+          # Only the on-device env carries a WakeNet model; the netwake build
+          # deliberately has none, so its image simply ends after the app.
+          if not require_model:
+              print("no on-device model expected for this env")
+              print("merged image looks structurally sound")
+              raise SystemExit(0)
 
           # The model is merged last, so the image must run past its offset
           # and end exactly where the srmodels payload ends. A short read or
@@ -151,8 +172,8 @@ jobs:
         if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
-          name: merged-firmware
-          path: sensesp-p4-cockpit/sensesp-p4-cockpit-merged.bin
+          name: merged-firmware-${{ matrix.env }}
+          path: sensesp-p4-cockpit/${{ matrix.env }}-merged.bin
 
   # Separate job so `contents: write` is never in scope while compiling
   # the four external checkouts above.
@@ -163,12 +184,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download merged binary
+      - name: Download merged binaries
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
-          name: merged-firmware
+          pattern: merged-firmware-*
+          merge-multiple: true
 
       - name: Attach merged binary to the release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
-          files: sensesp-p4-cockpit-merged.bin
+          files: "*-merged.bin"

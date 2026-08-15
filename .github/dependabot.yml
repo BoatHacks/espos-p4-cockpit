@@ -27,5 +27,5 @@ updates:
 #   the pull_request build gate prove it.
 #
 # - PlatformIO lib_deps and the ESP-IDF component manager. Neither is a
-#   Dependabot ecosystem, and four of the five lib_deps are symlink:// paths
+#   Dependabot ecosystem, and four of the seven lib_deps are symlink:// paths
 #   to sister repos that are meant to float with the firmware anyway.

@@ -133,7 +133,7 @@ The hands-free wake word is **chosen at build time**, and the two envs listen fo
 | `p4_cockpit` (default) | on-device (esp-sr WakeNet) | **"Hi ESP"** | the `model` partition flashed |
 | `p4_cockpit_netwake` | [signalk-openwakeword](https://github.com/dirkwa/signalk-openwakeword) over the network | whatever the server loads, e.g. **"hey moin"** | that plugin running and reachable |
 
-**The released `sensesp-p4-cockpit-merged.bin` is the default env**, so a browser-flashed panel listens for *"Hi ESP"*, not a custom word. For a custom word, build and flash the netwake env yourself:
+**Each release ships both variants** — `p4_cockpit-merged.bin` (on-device, *"Hi ESP"*) and `p4_cockpit_netwake-merged.bin` (network wake). Flash whichever matches the table above; for a wake word other than what the server already serves, or to point the netwake build at a specific host, build it yourself:
 
 ```bash
 pio run -e p4_cockpit_netwake -t upload
@@ -150,9 +150,9 @@ The firmware depends on released [SensESP](https://github.com/SignalK/SensESP) `
 For the very first flash — or recovery if a device won't boot — you don't need PlatformIO or the sister libs checked out on the flashing machine. [ESP Tool](https://www.espboards.dev/tools/program/) flashes over USB directly from the browser via the Web Serial API. This only replaces the one-time step of writing bootloader + partition table + app to a blank board; normal updates after that go over HTTP OTA (port 8080), not through this tool.
 
 1. **Browser**: Chrome, Edge, or Opera (Web Serial API isn't supported in Firefox or Safari).
-2. **Get the firmware**: every published [release](https://github.com/BoatHacks/sensesp-p4-cockpit/releases) has `sensesp-p4-cockpit-merged.bin` — a single file with the bootloader, partition table, app image, and the esp-sr WakeNet model partition already combined via `esptool merge_bin` (see [`.github/workflows/release-firmware.yml`](.github/workflows/release-firmware.yml)), flashable in one shot at offset `0x0`. `otadata` is deliberately left out: an erased `otadata` reads as all-`0xFF`, which the bootloader treats as "boot the first OTA slot" — exactly what a fresh flash wants. You can also build it yourself: `pio run -e p4_cockpit && python scripts/merge_firmware.py --build-dir .pio/build/p4_cockpit --chip esp32p4 --require-model --out sensesp-p4-cockpit-merged.bin`.
+2. **Get the firmware**: every published [release](https://github.com/BoatHacks/sensesp-p4-cockpit/releases) has `p4_cockpit-merged.bin` (and `p4_cockpit_netwake-merged.bin`) — a single file with the bootloader, partition table, app image, and the esp-sr WakeNet model partition already combined via `esptool merge_bin` (see [`.github/workflows/release-firmware.yml`](.github/workflows/release-firmware.yml)), flashable in one shot at offset `0x0`. `otadata` is deliberately left out: an erased `otadata` reads as all-`0xFF`, which the bootloader treats as "boot the first OTA slot" — exactly what a fresh flash wants. You can also build it yourself: `pio run -e p4_cockpit && python scripts/merge_firmware.py --build-dir .pio/build/p4_cockpit --chip esp32p4 --require-model --out p4_cockpit-merged.bin`.
 3. **Connect**: plug the board's USB-UART port into your computer, open the ESP Tool page, and click **Connect** to pick the serial port. If the board doesn't auto-reset into download mode, put it there manually: hold **BOOT**, tap **RESET**, then release **BOOT**.
-4. Switch to the **Flash firmware** tab, **Add File**, pick `sensesp-p4-cockpit-merged.bin`, and set its offset to `0x0`.
+4. Switch to the **Flash firmware** tab, **Add File**, pick the merged `.bin`, and set its offset to `0x0`.
 5. **Flash settings**: mode `dio`, freq `80m`, size `16MB` (see [`p4_16mb.csv`](p4_16mb.csv) / `board_upload.flash_size` in [platformio.ini](platformio.ini)).
 6. Click **Program** and wait for it to finish, then reset the board. Open a serial monitor (ESP Tool's built-in one, or `pio device monitor`) to confirm it boots and joins Wi-Fi.
 
