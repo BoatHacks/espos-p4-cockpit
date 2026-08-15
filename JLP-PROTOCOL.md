@@ -31,7 +31,7 @@ Capability descriptor. Always returns 200 with a JSON body:
   "schema": 1,
   "name": "Main helm",
   "hostname": "p4-cockpit",
-  "firmware": "p4-cockpit-jlp-0.2.1",
+  "firmware": "p4-cockpit-jlp-0.3.0",
   "display": { "w": 1024, "h": 600 },
   "widgets": {
     "label":  { "fields": ["x","y","w","h","label","bind","display"] },
