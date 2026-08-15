@@ -208,7 +208,19 @@ designer refuses to push widget kinds the device doesn't advertise.
 
 - **Build/test gate**: `pio run -e p4_cockpit` must succeed. There are
   no host tests today — verify on device via remote log + curl probes.
-- **Commits**: focused, atomic. Subject ≤ 50 chars, imperative.
+- **Commits and PR titles**: Angular Conventional Commits —
+  `type(scope): subject`, imperative, subject ≤ 50 chars. Types:
+  `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `build`, `ci`,
+  `chore`. Scope is optional (`fix(wake): ...`). The release notes are
+  generated from PR titles, so a vague title becomes a vague changelog
+  entry. Commits stay focused and atomic.
+- **Never commit local/boat configuration.** No WiFi SSIDs or
+  passwords, no server IPs, no personal wake words — not in source,
+  `platformio.ini`, or sdkconfig. `strings` on a firmware image prints
+  every one of them, and the merged binary is a public release asset.
+  Anything site-specific is a build-time `-D` with an empty default, so
+  a stock build ships unprovisioned and comes up on the SensESP config
+  portal.
 - **Never auto-commit, never auto-push.** Do both only when the user
   explicitly asks.
 - **No release-flow work** (version bumps, tags) unless the user says
