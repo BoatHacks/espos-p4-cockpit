@@ -1,0 +1,31 @@
+version: 2
+updates:
+  # The release workflow pins every action to a commit SHA so a moved tag
+  # can't reach a job that builds firmware and, in the release job, holds a
+  # writable token. Dependabot understands SHA pins and rewrites them with
+  # the tag in the comment, which is the only maintainable way to keep them
+  # current — unpinning to floating tags would undo that hardening.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+# Not covered, deliberately:
+#
+# - pip (platformio/esptool in release-firmware.yml). Dependabot only reads
+#   requirements/pyproject files, not `pip install` lines in a workflow, so
+#   it cannot see those pins. They are exact-pinned with the reasons inline:
+#   esptool must stay <5 (merge_bin was renamed merge-bin and the esptool.py
+#   entry point dropped), and platformio must stay >=6.1.18 (the pioarduino
+#   platform refuses to install on older cores). Bump them by hand and let
+#   the pull_request build gate prove it.
+#
+# - PlatformIO lib_deps and the ESP-IDF component manager. Neither is a
+#   Dependabot ecosystem, and four of the seven lib_deps are symlink:// paths
+#   to sister repos that are meant to float with the firmware anyway.

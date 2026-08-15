@@ -58,12 +58,37 @@
 using namespace sensesp;
 using namespace sensesp_cockpit_display;
 
+// Build-time provisioning. All four default to empty/zero so a stock build
+// — including the merged binary attached to a release — ships with NO boat
+// credentials in it. With no WiFi SSID, SensESP raises its own configuration
+// AP so the device is provisioned from a browser like any other SensESP node.
+//
+// Set them for a personal build if you'd rather not use the portal:
+//   pio run -e p4_cockpit \
+//     -D COCKPIT_WIFI_SSID='"..."' -D COCKPIT_WIFI_PASSWORD='"..."'
+//
+// Never commit real credentials here: `strings` on a firmware image prints
+// them, and release binaries are public.
+#ifndef COCKPIT_WIFI_SSID
+#define COCKPIT_WIFI_SSID ""
+#endif
+#ifndef COCKPIT_WIFI_PASSWORD
+#define COCKPIT_WIFI_PASSWORD ""
+#endif
+
 // SK server the firmware talks to: WS subscription, applicationData
 // fetch, and per-path zone/value REST seeding all target this host.
 // Surfaced on the connection-lost banner so the helm shows which
-// server is unreachable.
-static constexpr const char* kSkHost = "192.168.0.148";
-static constexpr uint16_t kSkPort = 4100;
+// server is unreachable. Empty host = discover/configure at runtime; the
+// SensESP config UI is the source of truth either way (see sk_server()).
+#ifndef COCKPIT_SK_HOST
+#define COCKPIT_SK_HOST ""
+#endif
+#ifndef COCKPIT_SK_PORT
+#define COCKPIT_SK_PORT 0
+#endif
+static constexpr const char* kSkHost = COCKPIT_SK_HOST;
+static constexpr uint16_t kSkPort = COCKPIT_SK_PORT;
 
 void setup() {
   SetupLogging(ESP_LOG_INFO);
@@ -116,7 +141,15 @@ void setup() {
   // name the word — an empty list makes openWakeWord fall back to its own
   // default model and silently ignore the one we want.
   wy_cfg.on_device_wake = false;
-  wy_cfg.wake_host = JLP_NETWORK_WAKE_HOST;
+  // Empty host — the default, so a release build carries no boat address —
+  // means "wherever SignalK is": signalk-openwakeword runs alongside it. Fall
+  // back to the build's SK host, which is itself empty on a stock build, and
+  // an empty wake_host simply leaves network wake idle until the device is
+  // provisioned (see WyomingSatelliteConfig::wake_host: "" = off).
+  {
+    const char* wake_host = JLP_NETWORK_WAKE_HOST;
+    wy_cfg.wake_host = (wake_host && *wake_host) ? wake_host : kSkHost;
+  }
   wy_cfg.wake_port = 10400;
   wy_cfg.wake_words = {JLP_NETWORK_WAKE_WORD};
 #else
@@ -163,7 +196,7 @@ void setup() {
 
   SensESPAppBuilder builder;
   auto app = builder.set_hostname("p4-cockpit")
-                 ->set_wifi_client("MOIN", "Moin2018!")
+                 ->set_wifi_client(COCKPIT_WIFI_SSID, COCKPIT_WIFI_PASSWORD)
                  ->set_wifi_access_point("", "")
                  ->set_sk_server(kSkHost, kSkPort)
                  ->get_app();
@@ -174,6 +207,7 @@ void setup() {
   // one server setting instead of the compile-time constant. kSkHost /
   // kSkPort are only the fallback until SensESP resolves an address.
   jlp::sk_server_set_default(kSkHost, kSkPort);
+
   {
     jlp::SkServer s = jlp::sk_server();
     jlp::overlay().set_sk_server(s.host.c_str(), s.port);

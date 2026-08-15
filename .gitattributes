@@ -3,3 +3,9 @@
 # Windows checkouts get CRLF and produce a tree-wide format
 # diff under any --check tool that reads file bytes directly.
 * text=auto eol=lf
+
+# Vendored ESP-IDF components ship with CRLF in places. `* text=auto eol=lf`
+# above wants to normalise them, so every build leaves ~15 files staged as
+# modified with a whitespace-only diff that is pure noise in `git status`.
+# They are third-party sources we don't edit — take their bytes verbatim.
+managed_components/** -text
