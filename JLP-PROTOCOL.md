@@ -187,7 +187,7 @@ Displayed value = `(raw × scale) + offset`, formatted to `decimals`, then `unit
 - Renders a caption (`label`) on the left and an LVGL switch on the right.
 - Subject kind: `Int` (treats `0` as off, anything else as on).
 - Tap → emits a SignalK PUT to `bind` with the inverted value. The visual switches optimistically and reconciles against the SK echo (~500 ms timeout); if no echo arrives, the switch snaps back to the authoritative subscription value.
-- **Local action sentinel** `bind: "@audio_mute"` — instead of a SignalK path, the toggle becomes a **panel-local audio mute**. ON = muted: the alert chime is suppressed on this panel (current and future alarms) while alarms still show on the overlay; OFF re-arms sound. No PUT, no subscription — the state is local to this device. `label` defaults to "MUTE".
+- **Local action sentinel** `bind: "@audio_mute"` — instead of a SignalK path, the toggle becomes a **panel-local audio mute**. ON = muted: the alert chime is suppressed on this panel (current and future alarms) while alarms still show on the overlay; OFF re-arms sound. No PUT, no subscription — the state is local to this device. `label` defaults to `MUTE CHIME` — the caption names the *action*, so ON = "muting" reads correctly here, unlike the `SPEAKER`/`MIC` tiles which name the hardware and therefore run ON = working.
 
 #### `arc`
 - Extra fields:
@@ -269,11 +269,11 @@ Displayed value = `(raw × scale) + offset`, formatted to `decimals`, then `unit
 - Extra fields: `label` (idle caption, default `TALK`), `bg_color`, `fg_color`.
 
 #### `mute_speaker`
-- Panel-local speaker mute toggle (ON = muted). Holds the audio power amp disabled, so **all** panel output — TTS/voice replies and alert chimes — goes silent until un-muted. No `bind`, no SignalK; a "quiet helm" switch.
+- Panel-local speaker switch. **ON = speaker works, OFF = muted** — the tile is captioned `SPEAKER`, so the switch follows the caption rather than the widget name. Muted holds the audio power amp disabled, so **all** panel output — TTS/voice replies and alert chimes — goes silent. No `bind`, no SignalK; a "quiet helm" switch.
 - Extra fields: `label` (default `SPEAKER`), `bg_color`, `fg_color`.
 
 #### `mute_mic`
-- Panel-local mic mute / privacy toggle (ON = muted). While muted, push-to-talk (and future always-on wake-word listening) is suppressed — the mic never streams. No `bind`, no SignalK.
+- Panel-local mic switch / privacy control. **ON = mic live, OFF = muted**, matching the `MIC` caption. While muted, push-to-talk and wake-word streaming are suppressed — the mic never streams. No `bind`, no SignalK.
 - Extra fields: `label` (default `MIC`), `bg_color`, `fg_color`.
 
 #### `volume`
