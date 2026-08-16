@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 namespace jlp {
@@ -46,5 +47,10 @@ bool store_clear();
 // a fresh device falls back to the compiled default.
 bool store_flag_get(const char* key, bool dflt);
 bool store_flag_set(const char* key, bool value);
+
+// Same, for a small unsigned value (speaker volume). Returns `dflt` when
+// the key is absent or unreadable.
+uint8_t store_u8_get(const char* key, uint8_t dflt);
+bool store_u8_set(const char* key, uint8_t value);
 
 }  // namespace jlp

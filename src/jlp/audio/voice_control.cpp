@@ -11,6 +11,7 @@ namespace jlp {
 // at 15 chars.
 static constexpr const char* kSpeakerMutedKey = "spk_muted";
 static constexpr const char* kMicMutedKey = "mic_muted";
+static constexpr const char* kVolumeKey = "volume";
 
 void VoiceControl::init(sensesp_wyoming::WyomingSatellite* sat,
                         sensesp_cockpit_display::AudioDriver* audio) {
@@ -21,7 +22,14 @@ void VoiceControl::init(sensesp_wyoming::WyomingSatellite* sat,
   // whatever the last person set instead of re-arming audio by surprise.
   speaker_muted_ = store_flag_get(kSpeakerMutedKey, false);
   mic_muted_.store(store_flag_get(kMicMutedKey, false));
-  if (audio_) audio_->set_enabled(!speaker_muted_);
+  volume_ = store_u8_get(kVolumeKey, volume_);
+  if (volume_ > 100) volume_ = 100;  // guard a corrupted//out-of-range read
+  if (audio_) {
+    audio_->set_enabled(!speaker_muted_);
+    // Push the restored level at the codec, otherwise the slider shows the
+    // stored value while the amp still runs at the driver default.
+    audio_->set_volume(volume_);
+  }
 }
 
 bool VoiceControl::available() const {
@@ -60,10 +68,14 @@ void VoiceControl::set_speaker_muted(bool muted) {
   store_flag_set(kSpeakerMutedKey, muted);
 }
 
-void VoiceControl::set_volume(uint8_t pct) {
+void VoiceControl::set_volume(uint8_t pct, bool persist) {
   if (pct > 100) pct = 100;
   volume_ = pct;
   if (audio_) audio_->set_volume(pct);
+  // Persisted like the mute flags: a helm turned down before a reboot should
+  // not come back at the driver default. Only on release, though — see the
+  // header: a drag emits a value change per pixel.
+  if (persist) store_u8_set(kVolumeKey, pct);
 }
 
 void VoiceControl::set_mic_muted(bool muted) {

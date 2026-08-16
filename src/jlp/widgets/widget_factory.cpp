@@ -582,13 +582,24 @@ lv_obj_t* build_volume(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   lv_obj_set_style_bg_color(sld, lv_color_hex(colors.fg), LV_PART_INDICATOR);
   lv_obj_set_style_bg_color(sld, lv_color_hex(colors.fg), LV_PART_KNOB);
 
+  // Track the drag live so the level follows the knob, but only write it to
+  // NVS on release: VALUE_CHANGED fires per pixel, and persisting each step
+  // would put a whole sweep's worth of writes through the flash.
   lv_obj_add_event_cb(
       sld,
       [](lv_event_t* e) {
         auto* w = static_cast<lv_obj_t*>(lv_event_get_target(e));
-        voice().set_volume((uint8_t)lv_slider_get_value(w));
+        voice().set_volume((uint8_t)lv_slider_get_value(w), /*persist=*/false);
       },
       LV_EVENT_VALUE_CHANGED, nullptr);
+  auto commit_cb = [](lv_event_t* e) {
+    auto* w = static_cast<lv_obj_t*>(lv_event_get_target(e));
+    voice().set_volume((uint8_t)lv_slider_get_value(w), /*persist=*/true);
+  };
+  lv_obj_add_event_cb(sld, commit_cb, LV_EVENT_RELEASED, nullptr);
+  // A drag that leaves the widget never emits RELEASED; without this the
+  // last level would apply but never persist.
+  lv_obj_add_event_cb(sld, commit_cb, LV_EVENT_PRESS_LOST, nullptr);
   return root;
 }
 
