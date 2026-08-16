@@ -18,11 +18,11 @@ namespace jlp {
 
 class VoiceControl {
  public:
+  // Wires the satellite + audio driver and restores the persisted
+  // speaker/mic mute state, so the panel comes back the way it was left.
+  // Call after store_init() — the flags live in the same NVS namespace.
   void init(sensesp_wyoming::WyomingSatellite* sat,
-            sensesp_cockpit_display::AudioDriver* audio) {
-    sat_ = sat;
-    audio_ = audio;
-  }
+            sensesp_cockpit_display::AudioDriver* audio);
 
   // --- Voice (Wyoming satellite) ---
 

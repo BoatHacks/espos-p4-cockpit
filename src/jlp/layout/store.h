@@ -36,4 +36,15 @@ bool store_write_atomic(const std::string& json);
 // false only on a real NVS error.
 bool store_clear();
 
+// Small named boolean flags in the same NVS namespace as the layout.
+// Used for panel-local audio state (speaker/mic/chime mute) so the helm
+// comes back the way it was left instead of unmuting itself on every
+// power cycle — a panel that beeps and opens its mic after a reboot is
+// not what the last person to touch it asked for.
+//
+// store_flag_get returns `dflt` when the key is absent or unreadable, so
+// a fresh device falls back to the compiled default.
+bool store_flag_get(const char* key, bool dflt);
+bool store_flag_set(const char* key, bool value);
+
 }  // namespace jlp

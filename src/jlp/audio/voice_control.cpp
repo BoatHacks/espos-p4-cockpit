@@ -3,7 +3,26 @@
 #include "sensesp_cockpit_display/hal/audio_driver.h"
 #include "sensesp_wyoming_satellite/wyoming_satellite.h"
 
+#include "jlp/layout/store.h"
+
 namespace jlp {
+
+// NVS keys for the persisted panel-local audio state. Short: NVS keys cap
+// at 15 chars.
+static constexpr const char* kSpeakerMutedKey = "spk_muted";
+static constexpr const char* kMicMutedKey = "mic_muted";
+
+void VoiceControl::init(sensesp_wyoming::WyomingSatellite* sat,
+                        sensesp_cockpit_display::AudioDriver* audio) {
+  sat_ = sat;
+  audio_ = audio;
+  // Restore the persisted mute state. Defaults to unmuted on a fresh
+  // device, so a first boot behaves as before; thereafter the helm keeps
+  // whatever the last person set instead of re-arming audio by surprise.
+  speaker_muted_ = store_flag_get(kSpeakerMutedKey, false);
+  mic_muted_.store(store_flag_get(kMicMutedKey, false));
+  if (audio_) audio_->set_enabled(!speaker_muted_);
+}
 
 bool VoiceControl::available() const {
   return sat_ && sat_->running() && sat_->client_connected();
@@ -35,6 +54,10 @@ void VoiceControl::set_speaker_muted(bool muted) {
   // set_enabled(false) holds the amp disabled so a quiet helm stays quiet;
   // set_enabled(true) re-arms it. Also mute the chime so a mute is total.
   if (audio_) audio_->set_enabled(!muted);
+  // Persist: a panel that unmutes itself on every power cycle overrides
+  // whoever silenced it, and a helm that beeps after a reboot is exactly
+  // the surprise a mute switch exists to prevent.
+  store_flag_set(kSpeakerMutedKey, muted);
 }
 
 void VoiceControl::set_volume(uint8_t pct) {
@@ -53,6 +76,9 @@ void VoiceControl::set_mic_muted(bool muted) {
     sat_->set_ptt_held(false);
     sat_->wake_pcm_clear();  // sets the lock-free probe-disable kill switch
   }
+  // Persist for the same reason as the speaker — a privacy switch that
+  // silently re-opens the mic at boot is worse than one that never existed.
+  store_flag_set(kMicMutedKey, muted);
 }
 
 VoiceControl& voice() {
