@@ -123,12 +123,19 @@ wins at runtime.
 ## Build / flash / debug
 
 ```bash
-pio run -e p4_cockpit                  # build (7B, the default)
+scripts/build.sh -e p4_cockpit         # build (7B, the default)
 pio run -e p4_cockpit -t upload        # flash via /dev/ttyACM0
 pio device monitor                     # local serial
 nc <device-ip> 2323                    # remote ESP-IDF log stream
 curl -sf http://<device-ip>:8081/hello | jq .
 ```
+
+Prefer `scripts/build.sh` over a bare `pio run` on a small machine: a
+full ESP-IDF build otherwise saturates every core (load ~8 on a 4-core
+Pi) and the editor/SSH session stops being scheduled. The wrapper runs
+the build at `nice -n 15`, `ionice -c3` and `-j $(nproc)-1` so one core
+stays free for interactive work. It takes the same arguments as
+`pio run`.
 
 Two board targets share a common `[common]` base in `platformio.ini`:
 
