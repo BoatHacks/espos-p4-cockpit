@@ -3,12 +3,16 @@
 #include "sensesp_cockpit_display/hal/audio_driver.h"
 #include "sensesp_wyoming_satellite/wyoming_satellite.h"
 
+#include "esp_log.h"
+
 #include "jlp/layout/store.h"
 
 namespace jlp {
 
 // NVS keys for the persisted panel-local audio state. Short: NVS keys cap
 // at 15 chars.
+static const char* kTag = "jlp.voice";
+
 static constexpr const char* kSpeakerMutedKey = "spk_muted";
 static constexpr const char* kMicMutedKey = "mic_muted";
 static constexpr const char* kVolumeKey = "volume";
@@ -30,6 +34,12 @@ void VoiceControl::init(sensesp_wyoming::WyomingSatellite* sat,
     // stored value while the amp still runs at the driver default.
     audio_->set_volume(volume_);
   }
+  // Log what was restored: the state is otherwise invisible until someone
+  // touches a switch, so a persistence failure looks identical to a fresh
+  // device and would go unnoticed.
+  ESP_LOGI(kTag, "restored audio: speaker=%s mic=%s volume=%u",
+           speaker_muted_ ? "muted" : "on", mic_muted_.load() ? "muted" : "on",
+           (unsigned)volume_);
 }
 
 bool VoiceControl::available() const {
