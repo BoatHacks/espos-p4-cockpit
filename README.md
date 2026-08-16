@@ -176,3 +176,24 @@ Or open the SK admin UI, launch **HMI Designer**, point it at `http://<device-ip
 - [sensesp-p4-cockpit-wasm](https://github.com/dirkwa/sensesp-p4-cockpit-wasm) — the same `widget_factory.cpp` compiled to WebAssembly so the designer can render layouts pixel-identically to the device without one being connected.
 - **sensesp-cockpit-display** — shared HAL (display, touch, idle backlight) + OTA + remote-log library for the Waveshare 7B (linked as a local symlink in `platformio.ini`).
 - **sensesp-n2k-gateway** — the N2K-over-TWAI + candump TCP gateway library (also a local symlink).
+
+## License
+
+sensesp-p4-cockpit 1.0.0 and later is **source available, not open source**.
+See [LICENSE.md](LICENSE.md).
+
+**You may**, free of charge: run it on your own boat or fleet, private or
+commercial; use it for internal company operations; modify it for your own use;
+use it in education and research; and provide professional services around it.
+
+**You may not**: redistribute it, or publish a modified version of it — as
+source, firmware images or otherwise. Verbatim copies of official releases
+(including the published firmware binaries) may be mirrored and cached.
+
+Releases 0.3.0 and earlier were published without a license file. The vendored
+Espressif display drivers under `components/` remain Apache-2.0; see
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
