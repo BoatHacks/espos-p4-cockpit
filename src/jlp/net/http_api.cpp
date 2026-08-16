@@ -612,7 +612,7 @@ esp_err_t hello_get(httpd_req_t* req) {
   resp["schema"] = 1;
   resp["name"] = name;
   resp["hostname"] = "p4-cockpit";
-  resp["firmware"] = "p4-cockpit-jlp-0.3.0";
+  resp["firmware"] = "p4-cockpit-jlp-1.0.0";
   resp["store"] = jlp::store_boot_report();  // persistence backend status
   // Persisted panel-local audio state, so it is checkable without a serial
   // console. NOT "audio" — that key already carries the codec-ready string
