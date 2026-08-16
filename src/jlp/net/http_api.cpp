@@ -614,6 +614,13 @@ esp_err_t hello_get(httpd_req_t* req) {
   resp["hostname"] = "p4-cockpit";
   resp["firmware"] = "p4-cockpit-jlp-0.3.0";
   resp["store"] = jlp::store_boot_report();  // persistence backend status
+  // Persisted panel-local audio state, so it is checkable without a serial
+  // console. NOT "audio" — that key already carries the codec-ready string
+  // below, and reusing it silently replaced this object with that string.
+  JsonObject audio_state = resp["audio_state"].to<JsonObject>();
+  audio_state["speaker_muted"] = jlp::voice().speaker_muted();
+  audio_state["mic_muted"] = jlp::voice().mic_muted();
+  audio_state["volume"] = jlp::voice().volume();
   JsonObject display = resp["display"].to<JsonObject>();
   // Report the live panel geometry from the active board HAL so the
   // designer maps its canvas to the real resolution (720x720 on the

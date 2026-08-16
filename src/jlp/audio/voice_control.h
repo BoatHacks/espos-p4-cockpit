@@ -41,7 +41,7 @@ class VoiceControl {
   // Mute/unmute the panel speaker output (holds the amp disabled). Panel-
   // local; does not touch SignalK.
   void set_speaker_muted(bool muted);
-  bool speaker_muted() const { return speaker_muted_; }
+  bool speaker_muted() const { return speaker_muted_.load(); }
 
   // Output volume 0-100 (applied at the codec). get_volume returns the last
   // set value (or a default) for a slider's initial position.
@@ -50,7 +50,7 @@ class VoiceControl {
   // so persisting each one would burn NVS for a single sweep) and true once
   // on release.
   void set_volume(uint8_t pct, bool persist = true);
-  uint8_t volume() const { return volume_; }
+  uint8_t volume() const { return volume_.load(); }
 
   // --- Microphone ---
 
@@ -64,9 +64,14 @@ class VoiceControl {
  private:
   sensesp_wyoming::WyomingSatellite* sat_ = nullptr;
   sensesp_cockpit_display::AudioDriver* audio_ = nullptr;
-  bool speaker_muted_ = false;
+  // All three are written on the event_loop (widget callbacks) and read from
+  // the httpd task (/hello's audio_state, the /mic_probe privacy gate, the
+  // satellite mute predicate), so they are atomic for the same reason
+  // mic_muted_ always was. Relaxed ordering is enough: each is an independent
+  // scalar and no reader infers anything from the order of the others.
+  std::atomic<bool> speaker_muted_{false};
   std::atomic<bool> mic_muted_{false};
-  uint8_t volume_ = 50;  // matches WaveshareAudio's default
+  std::atomic<uint8_t> volume_{50};  // matches WaveshareAudio's default
 };
 
 VoiceControl& voice();
