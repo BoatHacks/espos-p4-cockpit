@@ -6,9 +6,26 @@
 
 #include "esp_log.h"
 
+#include "jlp/layout/store.h"
+
 static const char* TAG = "jlp.chime";
 
 namespace jlp {
+
+// NVS key for the persisted chime mute (keys cap at 15 chars).
+static constexpr const char* kChimeMutedKey = "chime_muted";
+
+void Chime::init(sensesp_cockpit_display::AudioDriver* audio) {
+  audio_ = audio;
+  // Restore before any notification can fire, so a muted helm stays quiet
+  // through the boot chime as well.
+  muted_.store(store_flag_get(kChimeMutedKey, false));
+}
+
+void Chime::set_muted(bool m) {
+  muted_ = m;
+  store_flag_set(kChimeMutedKey, m);
+}
 
 namespace {
 

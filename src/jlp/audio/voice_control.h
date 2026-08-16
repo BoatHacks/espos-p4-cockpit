@@ -18,11 +18,11 @@ namespace jlp {
 
 class VoiceControl {
  public:
+  // Wires the satellite + audio driver and restores the persisted
+  // speaker/mic mute state, so the panel comes back the way it was left.
+  // Call after store_init() — the flags live in the same NVS namespace.
   void init(sensesp_wyoming::WyomingSatellite* sat,
-            sensesp_cockpit_display::AudioDriver* audio) {
-    sat_ = sat;
-    audio_ = audio;
-  }
+            sensesp_cockpit_display::AudioDriver* audio);
 
   // --- Voice (Wyoming satellite) ---
 
@@ -45,7 +45,11 @@ class VoiceControl {
 
   // Output volume 0-100 (applied at the codec). get_volume returns the last
   // set value (or a default) for a slider's initial position.
-  void set_volume(uint8_t pct);
+  // Applies immediately. `persist` writes the value to NVS — pass false
+  // while a slider is being dragged (LV_EVENT_VALUE_CHANGED fires per pixel,
+  // so persisting each one would burn NVS for a single sweep) and true once
+  // on release.
+  void set_volume(uint8_t pct, bool persist = true);
   uint8_t volume() const { return volume_; }
 
   // --- Microphone ---

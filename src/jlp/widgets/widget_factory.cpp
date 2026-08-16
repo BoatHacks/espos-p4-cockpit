@@ -385,11 +385,33 @@ lv_obj_t* build_value(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
 // Requires `bind` (Int subject). No optimistic latch — visual state
 // follows the subscription only. PUT path (tap → server PUT → echo
 // back) lands in step 7.
+namespace {
+// Switch-tile chrome, shared by @audio_mute and the mute_speaker/mute_mic
+// tiles so their captions get the same treatment.
+constexpr int kSwitchW = 60;
+constexpr int kSwitchH = 30;
+constexpr int kTilePad = 8;
+
+// Space left for the caption once the switch and padding are taken. Layouts
+// may omit w (JLP default 120), which leaves only ~44 px — less than
+// "SPEAKER" needs — so the caller clips instead of drawing under the switch.
+int label_width_for(JsonObjectConst spec) {
+  const int w = spec["w"] | 120;
+  const int avail = w - (kTilePad * 2) - kSwitchW - 4;  // 4 = breathing room
+  return avail > 16 ? avail : 16;
+}
+}  // namespace
+
 // Panel-local audio-mute toggle (bind "@audio_mute"). Same look as a
 // normal toggle, but ON = muted (chime suppressed on this panel, current
 // and future) with no SK path behind it — it reads and writes
 // chime().muted() directly. Authoritative local state, so no
 // subscription and no reconcile timer.
+//
+// Unlike the mute_speaker/mute_mic tiles, this one stays ON = muted: its
+// caption says what the switch DOES ("MUTE CHIME"), not what the hardware
+// is, so ON reading as "muting" is the consistent reading. Those two are
+// captioned SPEAKER/MIC and had to invert to match.
 lv_obj_t* build_audio_mute_toggle(BuildCtx& ctx, JsonObjectConst spec,
                                   std::string* err) {
   // Only one mute control per layout: each switch snapshots
@@ -412,16 +434,20 @@ lv_obj_t* build_audio_mute_toggle(BuildCtx& ctx, JsonObjectConst spec,
   lv_obj_set_style_pad_all(root, 8, LV_PART_MAIN);
   lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 
-  const char* caption = spec["label"] | "MUTE";
+  const char* caption = spec["label"] | "MUTE CHIME";
   lv_obj_t* l = lv_label_create(root);
   lv_obj_set_style_text_color(l, lv_color_hex(colors.fg), LV_PART_MAIN);
   lv_obj_set_style_text_font(l, font_from_spec(spec, &lv_font_montserrat_20),
                              LV_PART_MAIN);
   lv_label_set_text(l, caption);
+  // "MUTE CHIME" is wider than the default tile leaves room for; clip rather
+  // than run under the switch.
+  lv_obj_set_width(l, label_width_for(spec));
+  lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
   lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
 
   lv_obj_t* sw = lv_switch_create(root);
-  lv_obj_set_size(sw, 60, 30);
+  lv_obj_set_size(sw, kSwitchW, kSwitchH);
   lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
   if (chime().muted()) lv_obj_add_state(sw, LV_STATE_CHECKED);
 
@@ -458,10 +484,15 @@ lv_obj_t* make_local_toggle(BuildCtx& ctx, JsonObjectConst spec,
   lv_obj_set_style_text_font(l, font_from_spec(spec, &lv_font_montserrat_20),
                              LV_PART_MAIN);
   lv_label_set_text(l, caption);
+  // Bound the caption to what is left after the switch and padding, and dot
+  // it rather than let it run under the switch: at the documented default
+  // width (120) only ~44 px remain, which "SPEAKER" already exceeds.
+  lv_obj_set_width(l, label_width_for(spec));
+  lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
   lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
 
   lv_obj_t* sw = lv_switch_create(root);
-  lv_obj_set_size(sw, 60, 30);
+  lv_obj_set_size(sw, kSwitchW, kSwitchH);
   lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
   if (initial_on) lv_obj_add_state(sw, LV_STATE_CHECKED);
   lv_obj_set_user_data(root, sw);  // let callers return root but reach sw
@@ -469,8 +500,12 @@ lv_obj_t* make_local_toggle(BuildCtx& ctx, JsonObjectConst spec,
 }
 }  // namespace
 
-// `mute_speaker` — panel-local speaker/TTS mute (ON = muted). Holds the amp
-// disabled via voice().set_speaker_muted; no SK path.
+// `mute_speaker` — panel-local speaker switch. ON = speaker WORKS, OFF =
+// muted: the tile is captioned "SPEAKER", and a switch labelled SPEAKER
+// sitting off while audio plays reads as broken. The widget kind keeps its
+// mute_ name (the wire format is additive; renaming would break layouts) —
+// only the polarity the user sees is inverted, against
+// voice().set_speaker_muted, which still stores "is muted".
 lv_obj_t* build_mute_speaker(BuildCtx& ctx, JsonObjectConst spec,
                              std::string* err) {
   // One per layout: each switch snapshots voice().speaker_muted() at build
@@ -480,20 +515,22 @@ lv_obj_t* build_mute_speaker(BuildCtx& ctx, JsonObjectConst spec,
     return nullptr;
   }
   lv_obj_t* root =
-      make_local_toggle(ctx, spec, "SPEAKER", voice().speaker_muted());
+      make_local_toggle(ctx, spec, "SPEAKER", !voice().speaker_muted());
   lv_obj_t* sw = static_cast<lv_obj_t*>(lv_obj_get_user_data(root));
   lv_obj_add_event_cb(
       sw,
       [](lv_event_t* e) {
         auto* w = static_cast<lv_obj_t*>(lv_event_get_target(e));
-        voice().set_speaker_muted(lv_obj_has_state(w, LV_STATE_CHECKED));
+        voice().set_speaker_muted(!lv_obj_has_state(w, LV_STATE_CHECKED));
       },
       LV_EVENT_VALUE_CHANGED, nullptr);
   return root;
 }
 
-// `mute_mic` — panel-local mic mute / privacy switch (ON = muted). Suppresses
-// push-to-talk and (future) always-on listening via voice().set_mic_muted.
+// `mute_mic` — panel-local mic switch / privacy control. ON = mic LIVE,
+// OFF = muted, matching the "MIC" caption. Muted suppresses push-to-talk and
+// wake-word streaming via voice().set_mic_muted, which still stores "is
+// muted"; only the on-screen polarity is inverted.
 lv_obj_t* build_mute_mic(BuildCtx& ctx, JsonObjectConst spec,
                          std::string* err) {
   // One per layout: the switch snapshots voice().mic_muted() at build time,
@@ -502,13 +539,13 @@ lv_obj_t* build_mute_mic(BuildCtx& ctx, JsonObjectConst spec,
     *err = "mute_mic: only one per layout";
     return nullptr;
   }
-  lv_obj_t* root = make_local_toggle(ctx, spec, "MIC", voice().mic_muted());
+  lv_obj_t* root = make_local_toggle(ctx, spec, "MIC", !voice().mic_muted());
   lv_obj_t* sw = static_cast<lv_obj_t*>(lv_obj_get_user_data(root));
   lv_obj_add_event_cb(
       sw,
       [](lv_event_t* e) {
         auto* w = static_cast<lv_obj_t*>(lv_event_get_target(e));
-        voice().set_mic_muted(lv_obj_has_state(w, LV_STATE_CHECKED));
+        voice().set_mic_muted(!lv_obj_has_state(w, LV_STATE_CHECKED));
       },
       LV_EVENT_VALUE_CHANGED, nullptr);
   return root;
@@ -545,13 +582,24 @@ lv_obj_t* build_volume(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   lv_obj_set_style_bg_color(sld, lv_color_hex(colors.fg), LV_PART_INDICATOR);
   lv_obj_set_style_bg_color(sld, lv_color_hex(colors.fg), LV_PART_KNOB);
 
+  // Track the drag live so the level follows the knob, but only write it to
+  // NVS on release: VALUE_CHANGED fires per pixel, and persisting each step
+  // would put a whole sweep's worth of writes through the flash.
   lv_obj_add_event_cb(
       sld,
       [](lv_event_t* e) {
         auto* w = static_cast<lv_obj_t*>(lv_event_get_target(e));
-        voice().set_volume((uint8_t)lv_slider_get_value(w));
+        voice().set_volume((uint8_t)lv_slider_get_value(w), /*persist=*/false);
       },
       LV_EVENT_VALUE_CHANGED, nullptr);
+  auto commit_cb = [](lv_event_t* e) {
+    auto* w = static_cast<lv_obj_t*>(lv_event_get_target(e));
+    voice().set_volume((uint8_t)lv_slider_get_value(w), /*persist=*/true);
+  };
+  lv_obj_add_event_cb(sld, commit_cb, LV_EVENT_RELEASED, nullptr);
+  // A drag that leaves the widget never emits RELEASED; without this the
+  // last level would apply but never persist.
+  lv_obj_add_event_cb(sld, commit_cb, LV_EVENT_PRESS_LOST, nullptr);
   return root;
 }
 

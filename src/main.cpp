@@ -81,6 +81,16 @@ using namespace sensesp_cockpit_display;
 // Surfaced on the connection-lost banner so the helm shows which
 // server is unreachable. Empty host = discover/configure at runtime; the
 // SensESP config UI is the source of truth either way (see sk_server()).
+// Configuration AP raised when no client credentials are stored yet. The
+// password must be >= 8 chars (WPA2 minimum) or the AP silently fails to
+// start; "thisisfine" is SensESP's own documented default.
+#ifndef COCKPIT_AP_SSID
+#define COCKPIT_AP_SSID "p4-cockpit"
+#endif
+#ifndef COCKPIT_AP_PASSWORD
+#define COCKPIT_AP_PASSWORD "thisisfine"
+#endif
+
 #ifndef COCKPIT_SK_HOST
 #define COCKPIT_SK_HOST ""
 #endif
@@ -107,7 +117,8 @@ void setup() {
   // sink is also the intended path for a future voice feed.
   auto* audio = new WaveshareAudio();
   audio->init();
-  jlp::chime().init(audio);
+  // chime().init() is deferred until after store_init() below — it restores
+  // the persisted mute flag and would read an unmounted partition here.
 
   // Wyoming voice satellite (:10700). The boat's signalk-wyoming
   // orchestrator dials out to us: it plays TTS through the panel speaker and
@@ -162,7 +173,6 @@ void setup() {
   // Privacy gate: the mic-mute switch suppresses wake streaming AND PTT.
   wyoming_sat->set_mic_muted_fn([] { return jlp::voice().mic_muted(); });
   jlp::http_api_set_wyoming(wyoming_sat);
-  jlp::voice().init(wyoming_sat, audio);  // voice + audio-control widgets
 
   jlp::overlay().init();
   jlp::overlay().set_hostname("p4-cockpit");
@@ -170,6 +180,11 @@ void setup() {
   jlp::layout_manager().init(jlp::overlay().content_root());
 
   jlp::store_init();
+  // AFTER store_init(): both restore persisted mute state from the same NVS
+  // namespace, and would silently fall back to the unmuted default if the
+  // partition were not mounted yet.
+  jlp::chime().init(audio);
+  jlp::voice().init(wyoming_sat, audio);  // voice + audio-control widgets
   std::string stored;
   // Value-init so r.ok is false on the !store_read() path; Cppcheck
   // flags the default-init form as a use-of-uninitialized-member.
@@ -197,7 +212,12 @@ void setup() {
   SensESPAppBuilder builder;
   auto app = builder.set_hostname("p4-cockpit")
                  ->set_wifi_client(COCKPIT_WIFI_SSID, COCKPIT_WIFI_PASSWORD)
-                 ->set_wifi_access_point("", "")
+                 // Config portal. MUST have a non-empty SSID: SensESP treats
+                 // an empty pair as "disable the AP", which on a build with no
+                 // compiled-in client credentials leaves the panel with no way
+                 // to be provisioned at all — it sits in station mode hunting
+                 // for a network it was never told about.
+                 ->set_wifi_access_point(COCKPIT_AP_SSID, COCKPIT_AP_PASSWORD)
                  ->set_sk_server(kSkHost, kSkPort)
                  ->get_app();
 

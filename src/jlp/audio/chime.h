@@ -21,7 +21,9 @@ class Chime {
  public:
   /// Wire in the board audio sink. Null is tolerated (a board without
   /// a speaker) — play() then no-ops.
-  void init(sensesp_cockpit_display::AudioDriver* audio) { audio_ = audio; }
+  // Wires the audio driver and restores the persisted mute state. Call
+  // after store_init(); the flag shares the layout's NVS namespace.
+  void init(sensesp_cockpit_display::AudioDriver* audio);
 
   /// Play the tone for `state`. Nominal/normal are silent. Suppressed
   /// while muted unless `ignore_mute` (the /beep diagnostic forces one).
@@ -41,7 +43,9 @@ class Chime {
   /// AND future) until un-muted. Local to this panel; doesn't touch SK.
   /// Atomic: written on event_loop (the toggle) but also read on the
   /// httpd task via /beep -> test() -> play().
-  void set_muted(bool m) { muted_ = m; }
+  // Persisted: a helm silenced before a reboot must not start beeping
+  // again on its own.
+  void set_muted(bool m);
   bool muted() const { return muted_; }
 
  private:

@@ -132,4 +132,67 @@ bool store_clear() {
   return true;
 }
 
+bool store_flag_get(const char* key, bool dflt) {
+  nvs_handle_t h;
+  if (nvs_open_from_partition(kPartition, kNamespace, NVS_READONLY, &h) !=
+      ESP_OK) {
+    return dflt;  // partition not mounted yet, or nothing ever written
+  }
+  uint8_t v = 0;
+  esp_err_t err = nvs_get_u8(h, key, &v);
+  nvs_close(h);
+  if (err != ESP_OK) return dflt;
+  return v != 0;
+}
+
+uint8_t store_u8_get(const char* key, uint8_t dflt) {
+  nvs_handle_t h;
+  if (nvs_open_from_partition(kPartition, kNamespace, NVS_READONLY, &h) !=
+      ESP_OK) {
+    return dflt;
+  }
+  uint8_t v = 0;
+  esp_err_t err = nvs_get_u8(h, key, &v);
+  nvs_close(h);
+  return err == ESP_OK ? v : dflt;
+}
+
+bool store_u8_set(const char* key, uint8_t value) {
+  nvs_handle_t h;
+  esp_err_t err =
+      nvs_open_from_partition(kPartition, kNamespace, NVS_READWRITE, &h);
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "nvs_open (rw) failed for '%s': %s", key,
+             esp_err_to_name(err));
+    return false;
+  }
+  err = nvs_set_u8(h, key, value);
+  if (err == ESP_OK) err = nvs_commit(h);
+  nvs_close(h);
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "nvs write '%s' failed: %s", key, esp_err_to_name(err));
+    return false;
+  }
+  return true;
+}
+
+bool store_flag_set(const char* key, bool value) {
+  nvs_handle_t h;
+  esp_err_t err =
+      nvs_open_from_partition(kPartition, kNamespace, NVS_READWRITE, &h);
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "nvs_open (rw) failed for '%s': %s", key,
+             esp_err_to_name(err));
+    return false;
+  }
+  err = nvs_set_u8(h, key, value ? 1 : 0);
+  if (err == ESP_OK) err = nvs_commit(h);
+  nvs_close(h);
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "nvs write '%s' failed: %s", key, esp_err_to_name(err));
+    return false;
+  }
+  return true;
+}
+
 }  // namespace jlp
