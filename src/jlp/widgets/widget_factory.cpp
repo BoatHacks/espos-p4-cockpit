@@ -385,6 +385,23 @@ lv_obj_t* build_value(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
 // Requires `bind` (Int subject). No optimistic latch — visual state
 // follows the subscription only. PUT path (tap → server PUT → echo
 // back) lands in step 7.
+namespace {
+// Switch-tile chrome, shared by @audio_mute and the mute_speaker/mute_mic
+// tiles so their captions get the same treatment.
+constexpr int kSwitchW = 60;
+constexpr int kSwitchH = 30;
+constexpr int kTilePad = 8;
+
+// Space left for the caption once the switch and padding are taken. Layouts
+// may omit w (JLP default 120), which leaves only ~44 px — less than
+// "SPEAKER" needs — so the caller clips instead of drawing under the switch.
+int label_width_for(JsonObjectConst spec) {
+  const int w = spec["w"] | 120;
+  const int avail = w - (kTilePad * 2) - kSwitchW - 4;  // 4 = breathing room
+  return avail > 16 ? avail : 16;
+}
+}  // namespace
+
 // Panel-local audio-mute toggle (bind "@audio_mute"). Same look as a
 // normal toggle, but ON = muted (chime suppressed on this panel, current
 // and future) with no SK path behind it — it reads and writes
@@ -423,10 +440,14 @@ lv_obj_t* build_audio_mute_toggle(BuildCtx& ctx, JsonObjectConst spec,
   lv_obj_set_style_text_font(l, font_from_spec(spec, &lv_font_montserrat_20),
                              LV_PART_MAIN);
   lv_label_set_text(l, caption);
+  // "MUTE CHIME" is wider than the default tile leaves room for; clip rather
+  // than run under the switch.
+  lv_obj_set_width(l, label_width_for(spec));
+  lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
   lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
 
   lv_obj_t* sw = lv_switch_create(root);
-  lv_obj_set_size(sw, 60, 30);
+  lv_obj_set_size(sw, kSwitchW, kSwitchH);
   lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
   if (chime().muted()) lv_obj_add_state(sw, LV_STATE_CHECKED);
 
@@ -463,10 +484,15 @@ lv_obj_t* make_local_toggle(BuildCtx& ctx, JsonObjectConst spec,
   lv_obj_set_style_text_font(l, font_from_spec(spec, &lv_font_montserrat_20),
                              LV_PART_MAIN);
   lv_label_set_text(l, caption);
+  // Bound the caption to what is left after the switch and padding, and dot
+  // it rather than let it run under the switch: at the documented default
+  // width (120) only ~44 px remain, which "SPEAKER" already exceeds.
+  lv_obj_set_width(l, label_width_for(spec));
+  lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
   lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
 
   lv_obj_t* sw = lv_switch_create(root);
-  lv_obj_set_size(sw, 60, 30);
+  lv_obj_set_size(sw, kSwitchW, kSwitchH);
   lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
   if (initial_on) lv_obj_add_state(sw, LV_STATE_CHECKED);
   lv_obj_set_user_data(root, sw);  // let callers return root but reach sw
