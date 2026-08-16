@@ -24,22 +24,22 @@ void VoiceControl::init(sensesp_wyoming::WyomingSatellite* sat,
   // Restore the persisted mute state. Defaults to unmuted on a fresh
   // device, so a first boot behaves as before; thereafter the helm keeps
   // whatever the last person set instead of re-arming audio by surprise.
-  speaker_muted_ = store_flag_get(kSpeakerMutedKey, false);
+  speaker_muted_.store(store_flag_get(kSpeakerMutedKey, false));
   mic_muted_.store(store_flag_get(kMicMutedKey, false));
-  volume_ = store_u8_get(kVolumeKey, volume_);
-  if (volume_ > 100) volume_ = 100;  // guard a corrupted//out-of-range read
+  volume_.store(store_u8_get(kVolumeKey, volume_.load()));
+  if (volume_.load() > 100) volume_.store(100);  // guard an out-of-range read
   if (audio_) {
-    audio_->set_enabled(!speaker_muted_);
+    audio_->set_enabled(!speaker_muted_.load());
     // Push the restored level at the codec, otherwise the slider shows the
     // stored value while the amp still runs at the driver default.
-    audio_->set_volume(volume_);
+    audio_->set_volume(volume_.load());
   }
   // Log what was restored: the state is otherwise invisible until someone
   // touches a switch, so a persistence failure looks identical to a fresh
   // device and would go unnoticed.
   ESP_LOGI(kTag, "restored audio: speaker=%s mic=%s volume=%u",
-           speaker_muted_ ? "muted" : "on", mic_muted_.load() ? "muted" : "on",
-           (unsigned)volume_);
+           speaker_muted_.load() ? "muted" : "on",
+           mic_muted_.load() ? "muted" : "on", (unsigned)volume_.load());
 }
 
 bool VoiceControl::available() const {
@@ -68,7 +68,7 @@ int VoiceControl::state_code() const {
 }
 
 void VoiceControl::set_speaker_muted(bool muted) {
-  speaker_muted_ = muted;
+  speaker_muted_.store(muted);
   // set_enabled(false) holds the amp disabled so a quiet helm stays quiet;
   // set_enabled(true) re-arms it. Also mute the chime so a mute is total.
   if (audio_) audio_->set_enabled(!muted);
@@ -80,7 +80,7 @@ void VoiceControl::set_speaker_muted(bool muted) {
 
 void VoiceControl::set_volume(uint8_t pct, bool persist) {
   if (pct > 100) pct = 100;
-  volume_ = pct;
+  volume_.store(pct);
   if (audio_) audio_->set_volume(pct);
   // Persisted like the mute flags: a helm turned down before a reboot should
   // not come back at the driver default. Only on release, though — see the
