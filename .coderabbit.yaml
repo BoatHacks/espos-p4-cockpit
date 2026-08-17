@@ -1,0 +1,144 @@
+language: en-US
+
+reviews:
+  profile: assertive
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    # Mechanical PRs that don't benefit from review. `chore(release):`
+    # PRs are version-bump-only — the substantive change was already
+    # reviewed on its own PR. Dep bumps come from automation that has
+    # its own contract with the registry.
+    ignore_title_keywords:
+      - "chore(release):"
+      - "chore(deps):"
+      - "chore(deps-dev):"
+      - "[skip review]"
+      - "WIP"
+    ignore_usernames:
+      - "dependabot[bot]"
+      - "github-actions[bot]"
+      - "renovate[bot]"
+
+  # managed_components/ is the ESP-IDF component manager's checkout —
+  # 4300+ vendored files including prebuilt .a archives. It is never
+  # authored here and the manager rewrites it on any build, so reviewing
+  # it is pure noise. sdkconfig.* are generated per env from
+  # sdkconfig.defaults; only that file is hand-edited.
+  path_filters:
+    - "!managed_components/**"
+    - "!.pio/**"
+    - "!**/*.a"
+    - "!**/*.bin"
+    - "!sdkconfig.p4_cockpit"
+    - "!sdkconfig.p4_cockpit_4b"
+    - "!sdkconfig.p4_cockpit_netwake"
+
+  high_level_summary_instructions: |
+    Write summaries in present tense. Describe what the code does, not
+    what it did. Skip filler like "This PR" — go straight to the change.
+
+  path_instructions:
+    - path: "**/*"
+      instructions: |
+        ## Scope
+
+        Focus on files changed since `master`. Consider how changes
+        interact with existing code and documentation, not just the diff
+        in isolation.
+
+        sensesp-p4-cockpit is **ESP32-P4 firmware** running the JSON
+        Layout Player: a runtime-loadable LVGL widget engine driven by
+        JSON pushed over HTTP, plus a SignalK <-> NMEA 2000 gateway and
+        a Wyoming voice satellite. There are no host tests — the build
+        gate is `pio run` and verification happens on real hardware, so
+        weigh claims of "tested" against whether the PR shows device
+        output.
+
+        ## Architecture invariants (in AGENTS.md, non-negotiable)
+
+        - **Never blank the helm.** Layout parse and LVGL build happen
+          under a hidden staging parent; only a complete tree is swapped
+          in. A failed push must leave the previous layout rendering.
+        - **LVGL is single-writer** on the `event_loop` task. The HTTP
+          task parses and validates, then marshals build/swap via
+          `event_loop()->onDelay(0, ...)`. Flag any `lv_*` call reached
+          from the httpd, OTA, remote-log or audio tasks.
+        - **Wire format is additive.** New optional fields are fine;
+          removing, renaming or changing the semantics of a field bumps
+          `schema` 1 -> 2. Flag silent semantic changes to existing
+          fields.
+        - **No optimistic switch latch.** Toggle visuals derive from the
+          subscription, never from the press.
+
+        ## Cross-task state
+
+        Anything written on `event_loop` (widget callbacks) and read on
+        the httpd task (`/hello`, `/mic_probe`) must be `std::atomic` —
+        see `VoiceControl`. Flag plain scalars that gain a reader on
+        another task; that is a real race, not a theoretical one.
+
+        ## Widget kinds
+
+        Adding a kind means all of: a `build_<kind>()` in
+        `widget_factory.cpp`, a `LV_EVENT_DELETE` handler freeing every
+        heap allocation (and `off_change(token)` for any notifications
+        observer, or the next delta is a use-after-free), an entry in
+        the `/hello` widgets dictionary, dispatch in `build_widget()`,
+        and documentation in `JLP-PROTOCOL.md`. Flag a kind that is
+        missing any of them — a kind absent from `/hello` cannot be
+        pushed, because the designer refuses unknown kinds.
+
+        ## Boat configuration must never be committed
+
+        No WiFi SSIDs or passwords, no server IPs, no personal wake
+        words — not in source, `platformio.ini`, or sdkconfig. `strings`
+        on a firmware image prints every one of them and the merged
+        binary is a public release asset. Site-specific values are
+        build-time `-D` defines with empty defaults; local overrides
+        live in the gitignored `platformio_local.ini`. Flag any literal
+        that looks like a credential or a LAN address.
+
+        ## Comments
+
+        WHY, not WHAT. Flag comments that restate the code
+        (`// Sets the age` over `setAge()`), and flag development
+        narrative in comments or `.md` files ("Step 3:", "added in
+        PR #N", "previously implemented as"). That belongs in git
+        history. Flag stale references to symbols or approaches that no
+        longer exist on the branch.
+
+        ## Commit / PR conventions
+
+        - Angular conventional commits: `<type>(<scope>): <subject>`,
+          imperative, subject <= 50 chars. Release notes are generated
+          from PR titles, so a vague title becomes a vague changelog
+          entry.
+        - No `Co-Authored-By` lines, no AI-tool attribution anywhere.
+        - **No version bumps in feature/fix PRs.** Versions live in
+          their own `chore(release): X.Y.Z` PR. Flag a version string
+          that sneaks into a feat/fix PR.
+        - One logical change per PR.
+
+        ## Unchecked items in test plans
+
+        If a PR description contains a checklist with unchecked items,
+        flag it: either the work is unfinished or the checklist should
+        go before merge.
+
+        ## What NOT to flag
+
+        - `scripts/strip_lvgl_helium.py` deleting LVGL's helium asm
+          directory pre-build. LVGL 9.5 ships a `.S` file the RISC-V
+          toolchain cannot assemble; the workaround is deliberate and
+          documented.
+        - The `mute_speaker` / `mute_mic` widget kinds keeping their
+          `mute_` names while the switch reads ON = working. Renaming a
+          kind breaks every layout using it; only the on-screen polarity
+          was inverted, and `VoiceControl` still stores "is muted".
+        - `speechMinRms`-style constants duplicated between a config
+          module and its consumer where the import would create a cycle
+          — if a test asserts the copies match, that is the intended
+          shape.
+        - Deferred items listed under "Out of scope" in AGENTS.md.
