@@ -169,6 +169,19 @@ void setup() {
   wy_cfg.wake_input_gain = 6;  // mic quiet (~665 raw); x6 into WakeNet range
   wy_cfg.wake_threshold = 0.45f;
   wy_cfg.mic_stream_gain = 3;  // lift STT stream past the endpointer RMS floor
+  // No awake blip: it plays through the panel speaker in the moment before
+  // the utterance stream opens, and on this board the mic and speaker share
+  // one I2S bus inches apart, so the mic hears it. The orchestrator's
+  // endpointer seeds its noise floor from the first chunks of the stream, so
+  // the tone lands squarely in the seed and inflates the floor — measured
+  // here as floor 258-334 against a true cabin ambient of ~98, which raises
+  // the speech threshold correspondingly and eats into the margin a quiet
+  // far-field mic has to clear it.
+  //
+  // Feedback is not lost: the voice widget's caption switches to LISTENING
+  // (green) for the whole pipeline, driven by the satellite state rather than
+  // by this cue.
+  wy_cfg.awake_cue = false;
   auto* wyoming_sat = new sensesp_wyoming::WyomingSatellite(audio, wy_cfg);
   // Privacy gate: the mic-mute switch suppresses wake streaming AND PTT.
   wyoming_sat->set_mic_muted_fn([] { return jlp::voice().mic_muted(); });
