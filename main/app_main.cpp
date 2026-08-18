@@ -118,6 +118,48 @@ void poll_status_line() {
 }
 
 // ---- health watchdog (every 30 s, on the UI thread) ---------------------
+// The esp_hosted SDIO link to the C6 can wedge: the transport spams
+// "H_SDIO_DRV: task still writing Rx data to queue!", every RPC to the
+// radio times out, and nothing reaches the network — yet the WiFi state
+// machine still reports CONNECTED, because the disconnect event never
+// arrives over the jammed link. The panel then sits unreachable
+// indefinitely with a healthy heap and a responsive UI, so none of the
+// other checks fire.
+//
+// The SignalK stream is the honest signal: it is real traffic over that
+// same transport, so it drops within seconds of a wedge. Treat "WiFi
+// claims connected, but the stream has been down a long time" as a dead
+// link. The threshold is generous — a server restart or a genuine
+// network outage must not reboot the panel — and espOS reconnects the
+// stream by itself in every case where a reboot would not have helped.
+bool sk_link_stalled() {
+  static uint32_t down_since_s = 0;
+  constexpr uint32_t kStallSeconds = 180;
+
+  espos_wifi_status_t w;
+  const bool wifi_claims_up =
+      espos_wifi_get_status(&w) == ESP_OK && w.sm.state == ESPOS_WIFI_ST_CONNECTED;
+  espos_sk_ws_status_t ws;
+  const bool have_ws = espos_sk_ws_get_status(&ws) == ESP_OK;
+  const uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000);
+
+  // Only meaningful once the stream has been enabled and a server chosen;
+  // an unprovisioned panel is not "stalled", it is idle.
+  if (!wifi_claims_up || !have_ws || !ws.enabled || ws.reconnects == 0) {
+    down_since_s = 0;
+    return false;
+  }
+  if (ws.connected) {
+    down_since_s = 0;
+    return false;
+  }
+  if (down_since_s == 0) {
+    down_since_s = now_s;
+    return false;
+  }
+  return (now_s - down_since_s) >= kStallSeconds;
+}
+
 void health_check() {
   static int consecutive_fail = 0;
   bool ok = true;
@@ -142,6 +184,9 @@ void health_check() {
   } else if (s_n2k_rx && s_n2k_rx->ever_received() && s_n2k_rx->seconds_since_last_rx() > 30) {
     ok = false;
     reason = "n2k rx stalled";
+  } else if (sk_link_stalled()) {
+    ok = false;
+    reason = "wifi transport wedged (sk stream down while 'connected')";
   }
   if (!ok) {
     consecutive_fail++;
