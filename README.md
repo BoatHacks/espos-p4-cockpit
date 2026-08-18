@@ -142,11 +142,14 @@ scripts/build.sh
 idf.py -p /dev/ttyACM0 flash monitor
 ```
 
-Both wrappers are the raw builds (`npm run build` in `espos/ui`, `idf.py
-build` here) run under `nice`/`ionice`, with the firmware one capped at
-three ninja jobs and locked against a second concurrent build. On a
-4-core Pi a bare build takes the machine away from your editor; on a big
-workstation the raw commands are fine.
+Both wrappers run the build under `nice`/`ionice` and hold a lock so two
+of them never race on the same output. `build-ui.sh` runs `npm run build`
+in `espos/ui` (re-running `npm ci` when the lockfile changed);
+`build.sh` runs `idf.py reconfigure` and then `ninja -j 3` — IDF 6's
+`idf.py` has no `-j`, so capping parallelism means driving ninja
+directly (override with `BUILD_JOBS`). On a 4-core Pi a bare build takes
+the machine away from your editor; on a big workstation `idf.py build`
+is fine.
 
 The first build generates a *development* app-signing key
 (`secure_boot_signing_key.pem`, git-ignored). Devices flashed with a

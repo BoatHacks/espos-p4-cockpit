@@ -11,17 +11,31 @@
 # Usage: scripts/build-ui.sh [npm run args…]     (default: build)
 set -euo pipefail
 
-UI_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/espos/ui"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+UI_DIR="$REPO_DIR/espos/ui"
 if [ ! -f "$UI_DIR/package.json" ]; then
   echo "==> espos/ submodule is empty — run \`git submodule update --init\`" >&2
   exit 1
 fi
 cd "$UI_DIR"
 
-# npm ci wipes and reinstalls node_modules every time; only pay for it
-# when there is nothing to reuse.
-if [ ! -d node_modules ]; then
+# gzip-dist.mjs rm -rf's dist-gz/ before repopulating it, so a second run
+# overlapping the first leaves CMake packaging a half-empty storage image.
+LOCK="${TMPDIR:-/tmp}/.ui-build-$(id -u)-$(basename "$REPO_DIR").lock"
+exec 9>"$LOCK"
+if ! flock -n 9; then
+  echo "==> waiting for the running UI build to finish…" >&2
+  flock 9
+fi
+
+# npm ci wipes and reinstalls node_modules, so only pay for it when there
+# is nothing to reuse — or when the lockfile no longer matches what was
+# installed, which would otherwise build against stale packages.
+LOCK_HASH="$(sha256sum package-lock.json | cut -d' ' -f1)"
+STAMP="node_modules/.espos-lock-hash"
+if [ ! -d node_modules ] || [ "$(cat "$STAMP" 2>/dev/null)" != "$LOCK_HASH" ]; then
   nice -n 15 ionice -c 3 npm ci
+  printf '%s\n' "$LOCK_HASH" > "$STAMP"
 fi
 
 if [ $# -eq 0 ]; then
