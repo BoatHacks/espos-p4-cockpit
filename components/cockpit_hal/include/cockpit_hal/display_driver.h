@@ -15,6 +15,9 @@ class DisplayDriver {
   virtual void* get_draw_buffer(int index) = 0;
   virtual size_t get_draw_buffer_size() = 0;
   virtual void flush(int x, int y, int w, int h, const void* buf) = 0;
+  /// Block until the last flush() has actually consumed the source buffer.
+  /// Panels whose flush() is synchronous can leave this empty.
+  virtual void wait_flush_done() {}
   virtual void set_brightness(uint8_t /*pct*/) {}
   virtual void set_display_on(bool /*on*/) {}
 };

@@ -67,6 +67,17 @@ void Waveshare7BDisplay::init() {
   panel_cfg.vendor_config = &vendor_cfg;
 
   ESP_ERROR_CHECK(esp_lcd_new_panel_ek79007(dbi_io_, &panel_cfg, &panel_));
+  // draw_bitmap() only queues the copy; without waiting for this callback
+  // LVGL overwrites the draw buffer mid-transfer and the panel shows
+  // torn/stale strips (a periodic full-width flash).
+  trans_done_ = xSemaphoreCreateBinary();
+  esp_lcd_dpi_panel_event_callbacks_t cbs = {};
+  cbs.on_color_trans_done = [](esp_lcd_panel_handle_t, esp_lcd_dpi_panel_event_data_t*, void* ctx) -> bool {
+    BaseType_t woken = pdFALSE;
+    xSemaphoreGiveFromISR(static_cast<SemaphoreHandle_t>(ctx), &woken);
+    return woken == pdTRUE;
+  };
+  ESP_ERROR_CHECK(esp_lcd_dpi_panel_register_event_callbacks(panel_, &cbs, trans_done_));
   gpio_set_level(kResetGpio, 1);
   ESP_ERROR_CHECK(esp_lcd_panel_init(panel_));
   ESP_ERROR_CHECK(esp_lcd_dpi_panel_get_frame_buffer(panel_, kNumBuffers, &framebuffers_[0], &framebuffers_[1]));
@@ -80,6 +91,10 @@ void* Waveshare7BDisplay::get_draw_buffer(int index) { return framebuffers_[inde
 
 void Waveshare7BDisplay::flush(int x, int y, int w, int h, const void* buf) {
   esp_lcd_panel_draw_bitmap(panel_, x, y, x + w, y + h, buf);
+}
+
+void Waveshare7BDisplay::wait_flush_done() {
+  if (trans_done_) xSemaphoreTake(trans_done_, pdMS_TO_TICKS(100));
 }
 
 void Waveshare7BDisplay::init_ldo() {

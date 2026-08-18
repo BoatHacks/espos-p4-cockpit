@@ -46,6 +46,8 @@ void flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map) {
       px[total - 1 - i] = t;
     }
     s_display->flush(disp_w - (area->x1 + w), disp_h - (area->y1 + h), w, h, px_map);
+    // draw_bitmap is asynchronous: hold the buffer until the DMA copy is done.
+    s_display->wait_flush_done();
   }
   lv_display_flush_ready(disp);
 }

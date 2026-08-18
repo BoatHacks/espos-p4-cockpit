@@ -8,6 +8,8 @@
 #include "cockpit_hal/display_driver.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_lcd_panel_ops.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 namespace cockpit_hal {
 
@@ -25,6 +27,8 @@ class Waveshare7BDisplay : public DisplayDriver {
   void* get_draw_buffer(int index) override;
   size_t get_draw_buffer_size() override { return kBufferSize; }
   void flush(int x, int y, int w, int h, const void* buf) override;
+  /// Blocks until the last flush()'s DMA copy into the frame buffer is done.
+  void wait_flush_done() override;
   void set_brightness(uint8_t pct) override;
   void set_display_on(bool on) override;
 
@@ -35,6 +39,9 @@ class Waveshare7BDisplay : public DisplayDriver {
   esp_lcd_panel_io_handle_t dbi_io_ = nullptr;
   esp_lcd_panel_handle_t panel_ = nullptr;
   void* framebuffers_[kNumBuffers] = {};
+  // Given by the DPI driver's on_color_trans_done callback: draw_bitmap is
+  // asynchronous, so LVGL must not reuse the draw buffer until it fires.
+  SemaphoreHandle_t trans_done_ = nullptr;
 };
 
 class Waveshare7BTouch : public TouchDriver {
