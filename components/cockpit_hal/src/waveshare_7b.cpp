@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
 #include "cockpit_hal/waveshare_7b.h"
+#include "cockpit_hal/i2c_bus.h"
 
 #include <cstring>
 
@@ -125,6 +126,8 @@ void Waveshare7BDisplay::set_display_on(bool on) {
 
 static i2c_master_bus_handle_t s_bus = nullptr;
 static i2c_master_dev_handle_t s_gt = nullptr;
+
+i2c_master_bus_handle_t i2c_bus() { return s_bus; }
 
 static bool gt911_read_regs(uint16_t reg, uint8_t* buf, size_t len) {
   uint8_t a[2] = {(uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF)};

@@ -24,7 +24,7 @@
 #include "freertos/task.h"
 #include "lvgl.h"
 
-#include "cockpit_hal/null_audio.h"
+#include "cockpit_hal/waveshare_audio.h"
 #include "cockpit_hal/ui.h"
 #include "cockpit_hal/waveshare_7b.h"
 #include "cockpit_voice/wyoming_satellite.h"
@@ -177,13 +177,38 @@ extern "C" void app_main(void) {
     display.set_brightness((uint8_t)pct);
   }
 
-  // Audio + voice: inert stand-ins in phase 1 (see cockpit_voice).
-  static cockpit_hal::NullAudio audio;
+  // Panel speaker + mics (ES8311 + NS4150B, ES7210). Same hardware on 7B
+  // and 4B. Drives the alert chime and the voice satellite. Must come
+  // after the touch HAL: the codecs share its I2C bus.
+  static cockpit_hal::WaveshareAudio audio;
+  audio.init();
+
+  // Wyoming voice satellite (:10700): the boat's signalk-wyoming
+  // orchestrator dials in, plays TTS through the speaker and captures the
+  // mic (push-to-talk via the voice widget or the wake word). Wake runs
+  // on-device (esp-sr WakeNet "Hi ESP" from the model partition) unless
+  // cockpit.wake_host names a signalk-openwakeword server, in which case
+  // the mic streams there and any custom-trained word works.
   cockpit_voice::WyomingSatelliteConfig wy_cfg;
-  wy_cfg.on_device_wake = true;
-  wy_cfg.wake_input_gain = 6;
+  {
+    char wake_host[64] = "";
+    espos_config_get_str(ESPOS_CFG_NS_COCKPIT, ESPOS_CFG_COCKPIT_WAKE_HOST, wake_host, sizeof(wake_host), nullptr);
+    char wake_word[32] = "";
+    espos_config_get_str(ESPOS_CFG_NS_COCKPIT, ESPOS_CFG_COCKPIT_WAKE_WORD, wake_word, sizeof(wake_word), nullptr);
+    if (wake_host[0]) {
+      wy_cfg.on_device_wake = false;
+      wy_cfg.wake_host = wake_host;
+      wy_cfg.wake_port = 10400;
+      if (wake_word[0]) wy_cfg.wake_words = {wake_word};
+    } else {
+      wy_cfg.on_device_wake = true;
+    }
+  }
+  wy_cfg.wake_input_gain = 6;   // mic quiet (~665 raw); x6 into WakeNet range
   wy_cfg.wake_threshold = 0.45f;
-  wy_cfg.mic_stream_gain = 3;
+  wy_cfg.mic_stream_gain = 3;   // lift the STT stream past the endpointer floor
+  // No awake blip: mic and speaker share one I2S bus inches apart, and the
+  // orchestrator's endpointer would seed its noise floor from the tone.
   wy_cfg.awake_cue = false;
   static cockpit_voice::WyomingSatellite wyoming_sat(&audio, wy_cfg);
   wyoming_sat.set_mic_muted_fn([] { return jlp::voice().mic_muted(); });
@@ -256,6 +281,8 @@ extern "C" void app_main(void) {
   espos_config_get_i32(ESPOS_CFG_NS_COCKPIT, ESPOS_CFG_COCKPIT_API_PORT, &api_port);
   jlp::http_api_start((uint16_t)api_port);
   jlp::mdns_announce_start((uint16_t)api_port);
+  // Network is up (lwIP initialised by espOS): safe to open the satellite's
+  // TCP listener and the wake pipeline.
   wyoming_sat.start();
 
   xTaskCreate(ui_wdt_task, "ui_wdt", 2560, nullptr, configMAX_PRIORITIES - 1, nullptr);

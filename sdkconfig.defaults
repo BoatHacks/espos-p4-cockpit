@@ -71,3 +71,26 @@ CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=n
 CONFIG_LV_CONF_SKIP=n
 CONFIG_LV_BUILD_EXAMPLES=n
 CONFIG_LV_BUILD_DEMOS=n
+
+# ---- esp-sr: on-device wake word "Hi ESP" (WakeNet 9) from the "model" partition
+CONFIG_MODEL_IN_FLASH=y
+CONFIG_AFE_INTERFACE_V1=y
+CONFIG_SR_NSN_WEBRTC=y
+CONFIG_SR_VADN_WEBRTC=y
+CONFIG_SR_WN_WN9_HIESP=y
+CONFIG_SR_MN_CN_NONE=y
+CONFIG_SR_MN_EN_NONE=y
+
+# ---- Internal RAM at boot is the scarce resource on the P4 (RETENT_RAM ~100 KiB
+# after .data/.bss; esp_hosted allocates ~130 KiB before app_main and the main
+# task must still find a home). Keep hosted's task stacks in PSRAM and a few
+# IDF hot paths in flash instead of IRAM. Symptom otherwise:
+# "assert failed: esp_startup_start_app app_startup.c:83 (res == pdTRUE)".
+CONFIG_ESP_HOSTED_DFLT_TASK_FROM_SPIRAM=y
+CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
+CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y
+CONFIG_HEAP_PLACE_FUNCTION_INTO_FLASH=y
+CONFIG_RINGBUF_PLACE_FUNCTIONS_INTO_FLASH=y
+CONFIG_WIFI_RMT_IRAM_OPT=n
+CONFIG_WIFI_RMT_RX_IRAM_OPT=n
+CONFIG_WIFI_RMT_EXTRA_IRAM_OPT=n
