@@ -156,6 +156,11 @@ The first build generates a *development* app-signing key
 dev-key build only accept OTA images signed with that same key — for
 anything you ship, create and keep your own key (espos/docs/ota.md).
 
+Published releases are signed with a separate release key held as the
+`COCKPIT_SIGNING_KEY_PEM` repository secret, so a locally-built device
+does **not** accept release OTAs until it has been USB-flashed once with a
+release image. After that first flash, release OTAs work normally.
+
 **Provisioning**: no credentials are compiled in. A fresh panel raises the
 `espOS-xxxx` setup portal (WiFi + SignalK) — or write an NVS image with
 `wifi.ssid0/psk0` and `sk.server_*` (espos/docs/wifi.md). The SignalK access
@@ -165,8 +170,10 @@ once. Updates afterwards go over espOS OTA (`http://<device>/` → OTA, or
 
 The build produces `build/cockpit.bin` (signed) and, with the espOS UI
 built, `build/storage.bin`; `python scripts/merge_firmware.py --build-dir
-build --chip esp32p4 --out cockpit-merged.bin` makes the single image the
-release workflow attaches (flash at `0x0`).
+build --chip esp32p4 --out p4_cockpit-merged.bin` makes the single image
+the release workflow attaches (flash at `0x0`). Releases publish it as
+`p4_cockpit-<version>-merged.bin`, alongside
+`p4_cockpit-<version>-ota.bin` — the bare app image for OTA.
 
 ## Wake word
 
@@ -185,9 +192,9 @@ For the very first flash — or recovery if a device won't boot —
 [ESP Tool](https://www.espboards.dev/tools/program/) flashes over USB
 directly from the browser (Chrome/Edge). Every published
 [release](https://github.com/dirkwa/espos-p4-cockpit/releases) has
-`cockpit-merged.bin` (bootloader + partition table + app + web UI image),
-flashable in one shot at offset `0x0`, flash settings `dio` / `80m` /
-`16MB`. Hold **BOOT**, tap **RESET** if the board does not auto-enter
+`p4_cockpit-<version>-merged.bin` (bootloader + partition table + app +
+web UI + wake-word model), flashable in one shot at offset `0x0`, flash
+settings `dio` / `80m` / `16MB`. Hold **BOOT**, tap **RESET** if the board does not auto-enter
 download mode.
 
 ## Push your first layout

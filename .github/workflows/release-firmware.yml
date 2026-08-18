@@ -35,11 +35,25 @@ jobs:
       # release builds must instead restore the project's real key from a
       # secret (see espos/docs/ota.md) — devices only accept images signed
       # with the key whose public part they were flashed with.
+      #
+      # Fail rather than fall back: a release signed with a per-run throwaway
+      # key installs fine over USB and then rejects every future OTA, on the
+      # device, long after CI went green.
       - name: restore signing key (releases)
-        if: github.event_name == 'release' && env.KEY != ''
+        if: github.event_name == 'release'
         env:
           KEY: ${{ secrets.COCKPIT_SIGNING_KEY_PEM }}
-        run: printf '%s' "$KEY" > secure_boot_signing_key.pem
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::COCKPIT_SIGNING_KEY_PEM is not set. A release built" \
+                 "without it would be signed with a throwaway key and could" \
+                 "never be updated over OTA. See espos/docs/ota.md."
+            exit 1
+          fi
+          printf '%s' "$KEY" > secure_boot_signing_key.pem
+          # A truncated or mangled secret would otherwise surface as a cryptic
+          # CMake failure; check it is a usable RSA key before the 6-minute build.
+          openssl rsa -in secure_boot_signing_key.pem -noout -check
 
       - uses: espressif/esp-idf-ci-action@v1
         with:
@@ -47,31 +61,56 @@ jobs:
           target: esp32p4
           command: idf.py build
 
+      # --require-model on releases: merging without srmodels.bin yields an
+      # image whose on-device wake word is dead and which OTA cannot repair.
       - name: Merge flash images into one binary
         run: |
           pip install "esptool==4.8.1"
-          python scripts/merge_firmware.py --build-dir build --chip esp32p4 --out cockpit-merged.bin
+          python scripts/merge_firmware.py --build-dir build --chip esp32p4 \
+            --out p4_cockpit-merged.bin \
+            ${{ github.event_name == 'release' && '--require-model' || '' }}
 
       - name: Verify merged binary
         run: |
           python - <<'PY'
           import sys
           from pathlib import Path
-          data = Path("cockpit-merged.bin").read_bytes()
+          data = Path("p4_cockpit-merged.bin").read_bytes()
           print(f"{len(data)} bytes ({len(data)/1024/1024:.2f} MiB)")
           if data[0x2000] != 0xE9:
               sys.exit(f"error: no ESP image magic at 0x2000 (got {data[0x2000]:#04x})")
+          # The web UI is a separate LittleFS partition, so a missing or empty
+          # one still yields a bootable image — the panel just serves espOS'
+          # placeholder page instead of the config UI, which reads as a
+          # firmware bug. Offsets track p4_16mb.csv.
+          STORAGE = 0xD80000
+          if len(data) <= STORAGE or data[STORAGE:STORAGE + 0x1000] == b"\xff" * 0x1000:
+              sys.exit("error: storage partition missing or blank — the web UI "
+                       "image was not merged (build espos/ui first)")
           print("merged image looks structurally sound")
           PY
+
+      # Stage both files in one flat dir: upload-artifact strips to the least
+      # common ancestor, so uploading build/cockpit.bin alongside a top-level
+      # file silently drops the build/ prefix the release job asked for.
+      # The OTA asset carries the version because that is what a device is
+      # pointed at by URL; the merged image is the USB/full-flash one.
+      - name: Stage release assets
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION:-$(cat version.txt)}"
+          mkdir -p dist
+          cp p4_cockpit-merged.bin "dist/p4_cockpit-${VERSION}-merged.bin"
+          cp build/cockpit.bin     "dist/p4_cockpit-${VERSION}-ota.bin"
+          ls -l dist/
 
       - name: Upload build artifact
         if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: merged-firmware
-          path: |
-            cockpit-merged.bin
-            build/cockpit.bin
+          path: dist/
 
   release:
     if: github.event_name == 'release'
@@ -83,8 +122,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: merged-firmware
+          path: dist
       - uses: softprops/action-gh-release@v2
         with:
-          files: |
-            cockpit-merged.bin
-            build/cockpit.bin
+          fail_on_unmatched_files: true
+          files: dist/*.bin
