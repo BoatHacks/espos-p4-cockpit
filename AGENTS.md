@@ -18,10 +18,12 @@ Companion projects:
 - **espOS** — `../espOS` is the working checkout; `espos/` here is the
   submodule pinned by commit. Generic device features go into espOS
   (with host tests), panel-specific ones stay here.
-- **sensesp-cockpit-display / -n2k-gateway / -ble-gateway /
-  -wyoming-satellite** — the 1.x Arduino libraries whose contents are being
-  folded into `components/` (cockpit_hal, cockpit_voice, later
-  cockpit_n2k, cockpit_ble) phase by phase.
+- **sensesp-cockpit-display / -n2k-gateway / -wyoming-satellite** — the 1.x
+  Arduino libraries, now folded into `components/` here (`cockpit_hal`,
+  `cockpit_voice`, `cockpit_n2k`). They stay in place for 1.x on `master`;
+  2.x does not link them. **sensesp-ble-gateway** is deliberately not
+  ported: 1.x linked it but never instantiated it, and BLE scanning
+  through the C6 is blocked upstream.
 
 ## Where to start reading
 
@@ -51,15 +53,20 @@ single feature.
 2. **No optimistic switch latch.** Toggle visual state derives from the
    subscription only. Press handlers PUT and rely on the SK echo to
    flip; a 500 ms reconciliation timer snaps back if no echo arrives.
-3. **LVGL is single-writer** on the `ui` task (`cockpit_hal::ui`). The
+3. **The DSI flush is asynchronous.** `esp_lcd_panel_draw_bitmap()` only
+   queues the copy; the flush callback must wait for `on_color_trans_done`
+   (`DisplayDriver::wait_flush_done()`) before `lv_display_flush_ready()`,
+   or LVGL overwrites the draw buffer mid-DMA and the panel flashes stale
+   strips.
+4. **LVGL is single-writer** on the `ui` task (`cockpit_hal::ui`). The
    HTTP task parses + validates, then marshals build/swap with
    `ui::post(...)`. espOS SignalK callbacks (`espos_sk_subscribe`) fire on
    the stream task: copy the strings and `ui::post` before any `lv_*`
    work. `ui::after/every` are LVGL timers (UI task). No `lv_*` call from
    any other task. Ever.
-4. **OSS only**, programmatic LVGL API only — no LVGL Pro / XML
+5. **OSS only**, programmatic LVGL API only — no LVGL Pro / XML
    runtime / GPL deps.
-5. **Wire format is additive.** New optional fields are fine. Removing
+6. **Wire format is additive.** New optional fields are fine. Removing
    a field, renaming, or changing semantics bumps `schema` from 1 → 2.
 
 ## Pipeline: parse → validate → stage → swap → persist
@@ -195,7 +202,9 @@ designer refuses to push widget kinds the device doesn't advertise.
 | espOS httpd (80)  | no            | web UI + REST (config, OTA, logs, core dump) |
 | `esp_timer` 1 ms  | no            | `lv_tick_inc(1)` only — lock-free |
 | `espos_skws` task | no            | espOS SignalK stream; subscription callbacks run here and `ui::post` their work |
-| `audio` task      | no            | Drains the chime clip queue; blocking I2S write to the ES8311. `WaveshareAudio::play_pcm` (called from the UI task) copies + enqueues, never blocks (phase 2) |
+| `audio` task      | no            | Drains the chime clip queue; blocking I2S write to the ES8311. `WaveshareAudio::play_pcm` (called from the UI task) copies + enqueues, never blocks |
+| `wyoming_*` tasks | no            | Voice satellite: TCP server, mic streaming, wake feed/fetch (esp-sr AFE) |
+| `twai_rx` / candump | no          | N2K receive + per-client fan-out to the candump TCP server |
 
 ## Repo conventions
 

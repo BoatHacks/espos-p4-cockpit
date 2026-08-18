@@ -32,7 +32,12 @@ The UI is **runtime-loadable**: instead of rebuilding firmware per layout change
 - mDNS-announced as `_signalk-player._tcp` so designers can discover it.
 - Everything else a device needs — WiFi setup portal, config UI at `http://<device>/`, SignalK server discovery + access request, signed OTA from a URL or a version manifest with automatic rollback, log ring and core-dump viewer — is espOS ([its docs](https://github.com/dirkwa/espOS/tree/main/docs)).
 
-Port status (2.x): display, layouts, SK values/meta/notifications, anchor PUTs and the layout API are live; audio/voice, the N2K gateway and the BLE gateway are being ported phase by phase and compile against inert stand-ins until then.
+Port status (2.x): display, layouts, SK values/meta/notifications, anchor
+PUTs, the layout API, the audio/voice satellite (ES8311 + ES7210, esp-sr
+WakeNet or signalk-openwakeword) and the NMEA 2000 gateway are all ported
+and running on the panel. The BLE gateway is **not** part of 2.x: 1.x
+linked the library but never instantiated it, and BLE scanning through the
+C6 is blocked upstream — it stays a separate concern.
 
 ## Boot priority chain
 
@@ -53,7 +58,8 @@ If a pushed or fetched layout fails parse/validate/build, the previous layout st
 | 8081 | GET    | `/screenshot`   | Framebuffer dump. Default: software-encoded JPEG. `?fmt=bmp` for the legacy RGB565 BMP. |
 | 8081 | GET    | `/healthz`      | Liveness probe                                |
 | 80   | *      | `/`, `/api/v1/…` | espOS web UI + REST API (config, WiFi, SignalK, OTA, logs, core dump) |
-| 2599 | TCP    | (candump)       | Stream raw N2K frames in candump format (phase 3) |
+| 2599 | TCP    | (candump)       | Stream raw N2K frames in candump format       |
+| 10700| TCP    | (wyoming)       | Voice satellite: the orchestrator dials in    |
 
 The full contract — request/response shapes, schema, widget fields, error codes — is in [JLP-PROTOCOL.md](JLP-PROTOCOL.md).
 
@@ -153,13 +159,16 @@ built, `build/storage.bin`; `python scripts/merge_firmware.py --build-dir
 build --chip esp32p4 --out cockpit-merged.bin` makes the single image the
 release workflow attaches (flash at `0x0`).
 
-## Wake word (phase 2)
+## Wake word
 
-The hands-free wake word (on-device esp-sr WakeNet, or
-[signalk-openwakeword](https://github.com/dirkwa/signalk-openwakeword) over
-the network) returns with the audio/voice phase of the espOS port; until
-then the voice widgets report "not available" and `GET /hello` shows no
-`wake` block.
+The hands-free wake word is now **runtime configuration**, not a build
+variant. `cockpit.wake_host` empty runs on-device esp-sr WakeNet ("Hi ESP",
+from the `model` partition); set it to the host running
+[signalk-openwakeword](https://github.com/dirkwa/signalk-openwakeword) (plus
+`cockpit.wake_word`) to stream the mic there instead and use any
+custom-trained word. Both are set from the espOS config UI at
+`http://<device>/` — no reflash. `GET /hello` reports which mode is live
+under `wake`.
 
 ## Flashing without a toolchain (browser-based)
 
