@@ -369,6 +369,15 @@ void WakeEngine::fetch_loop() {
       ESP_LOGI(kTag, "wake word detected (%s)", word_);
       if (on_detect_) on_detect_();
     }
+    // fetch() normally blocks until the feed side delivers a frame, so this
+    // loop is self-pacing. It is not when the feed stalls (a wedged mic, or
+    // the I2S clock reclocked out from under it): fetch() then returns
+    // immediately every time and this task, at priority 5 pinned to CPU 0,
+    // spins hard enough to starve IDLE0 — "Task watchdog got triggered ...
+    // CPU 0: wake_fetch" every 5 s, and the UI stutters with it. One tick
+    // costs nothing while fetch() blocks properly, and bounds the damage
+    // when it does not.
+    vTaskDelay(1);
   }
 }
 
