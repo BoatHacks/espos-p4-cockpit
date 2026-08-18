@@ -17,7 +17,9 @@ Companion projects:
   layouts. Lives at `../signalk-hmi-designer`.
 - **espOS** — `../espOS` is the working checkout; `espos/` here is the
   submodule pinned by commit. Generic device features go into espOS
-  (with host tests), panel-specific ones stay here.
+  (with host tests), panel-specific ones stay here. Fixes found while
+  debugging this panel follow the same rule — see
+  [Fixing espOS from here](#fixing-espos-from-here).
 - **sensesp-cockpit-display / -n2k-gateway / -wyoming-satellite** — the 1.x
   Arduino libraries, now folded into `components/` here (`cockpit_hal`,
   `cockpit_voice`, `cockpit_n2k`). They stay in place for 1.x on `master`;
@@ -207,6 +209,47 @@ designer refuses to push widget kinds the device doesn't advertise.
 | `audio` task      | no            | Drains the chime clip queue; blocking I2S write to the ES8311. `WaveshareAudio::play_pcm` (called from the UI task) copies + enqueues, never blocks |
 | `wyoming_*` tasks | no            | Voice satellite: TCP server, mic streaming, wake feed/fetch (esp-sr AFE) |
 | `twai_rx` / candump | no          | N2K receive + per-client fan-out to the candump TCP server |
+
+## Fixing espOS from here
+
+Most espOS bugs surface here first — this is the loudest consumer, and
+some of them (WiFi wedges, stream stalls) only reproduce on real hardware
+with a real SignalK server. That is fine. What is not fine is leaving the
+fix here.
+
+**If a fix belongs to espOS, it lands in espOS.** A change is espOS's when
+it is about WiFi, provisioning, config, the config web UI, SignalK
+discovery / token / stream, logs, core dump or OTA — regardless of which
+repo you were staring at when you found it. Panel-specific means display,
+touch, audio, LVGL, JLP, voice or N2K.
+
+The trap is `sdkconfig.defaults`. A radio or hosted-transport setting
+fixed only here is invisible to every other espOS board, and the next
+project rediscovers the same wedge from scratch. `CONFIG_WIFI_RMT_RX_BA_WIN`
+was fixed in this repo first and had to be upstreamed afterwards
+(cockpit #72 → espOS #1); do it in the other order.
+
+Order of work:
+
+1. **Fix it in `../espOS`**, on a branch, with a host test where the logic
+   is testable (parsers, state machines, cadence). Explain *why* in the
+   commit — a bare Kconfig line with no rationale gets reverted by the next
+   person who reads the IDF default and disagrees.
+2. **Document the constraint** in the matching `espos/docs/*.md`
+   (`wifi.md`, `signalk.md`, …) when the fix encodes a hardware or
+   protocol limit rather than a plain bug. Other boards need the reasoning,
+   not just the value.
+3. **Verify on this panel** against your espOS branch — point the submodule
+   at it locally, or build with `../espOS` checked out to the branch.
+4. **Merge espOS first**, then bump the submodule here in its own
+   `chore: bump espos to <sha>` PR. Never merge a cockpit PR whose
+   behaviour depends on unmerged espOS work; the pinned sha is what CI and
+   every other checkout actually build.
+
+A temporary workaround in this repo is acceptable only when the panel is
+unusable without it and the upstream fix is genuinely still open. Say so
+in the code comment, name the espOS issue or PR, and remove the workaround
+when the bump lands.
 
 ## Repo conventions
 
