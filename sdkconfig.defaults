@@ -106,3 +106,24 @@ CONFIG_TWAI_ERRATA_FIX_LISTEN_ONLY_DOM=y
 # underruns and the whole panel blanks for an instant. Symptom: periodic
 # full-screen flicker on any layout.
 CONFIG_LCD_DSI_ISR_CACHE_SAFE=y
+
+# ---- esp_hosted SDIO: conservative profile.
+# The high-throughput tuning here was inherited from 1.x, which streamed
+# MJPEG frames off the panel. 2.x does not: its heaviest traffic is an
+# occasional ~30 KB screenshot, so the aggressive settings buy nothing
+# and are prime suspects for the transport wedging
+# (espressif/esp-hosted-mcu#184) — the panel goes unreachable while
+# H_SDIO_DRV spams "task still writing Rx data to queue!", i.e. an Rx
+# queue overrun.
+#
+# NOT streaming mode: tested and it does not boot. The C6 slave firmware
+# is fixed in streaming mode and the host must match, or the transport
+# asserts at startup:
+#   "SDIO mode mismatch: slave is in streaming mode, but host is in
+#    packet mode. Aborting." (transport_drv.c:892)
+# So RX_STREAMING_MODE stays on; only the block-ack window below is
+# available to tune from the host side.
+# Match the C6 slave's own default block-ack window instead of forcing 16.
+# With hosted WiFi the radio is remote, so the knob that reaches it is
+# WIFI_RMT_* (esp_wifi_remote), not the local ESP_WIFI_* one.
+CONFIG_WIFI_RMT_RX_BA_WIN=6
