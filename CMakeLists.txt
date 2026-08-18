@@ -47,5 +47,10 @@ project(cockpit)
 if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/espos/ui/dist-gz/index.html.gz")
     littlefs_create_partition_image(storage "${CMAKE_CURRENT_LIST_DIR}/espos/ui/dist-gz" FLASH_IN_PROJECT)
 else()
-    message(STATUS "cockpit: espos/ui/dist-gz missing — `cd espos/ui && npm ci && npm run build` to include the web UI")
+    # WARNING, not STATUS: a STATUS line disappears into cmake's output and
+    # the panel then silently serves espOS' placeholder page instead of the
+    # real config UI, which looks like a firmware bug rather than a missing
+    # build step.
+    message(WARNING "cockpit: espos/ui/dist-gz missing — the device will serve the placeholder page, "
+                    "not the espOS web UI. Build it with: (cd espos/ui && npm ci && npm run build)")
 endif()
