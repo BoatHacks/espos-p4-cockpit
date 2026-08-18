@@ -1,0 +1,64 @@
+{
+  "namespace": "cockpit",
+  "version": 1,
+  "title": "Cockpit",
+  "description": "Panel behaviour that is not part of a layout: brightness, idle dimming, the layout push port.",
+  "keys": [
+    {
+      "name": "brightness",
+      "type": "int",
+      "default": 95,
+      "min": 5,
+      "max": 100,
+      "unit": "%",
+      "title": "Backlight brightness"
+    },
+    {
+      "name": "idle_s",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 3600,
+      "unit": "s",
+      "title": "Idle dim after",
+      "description": "Dim the backlight when nothing was touched for this long. 0 = never."
+    },
+    {
+      "name": "idle_pct",
+      "type": "int",
+      "default": 10,
+      "min": 0,
+      "max": 100,
+      "unit": "%",
+      "title": "Idle brightness"
+    },
+    {
+      "name": "api_port",
+      "type": "int",
+      "default": 8081,
+      "min": 1,
+      "max": 65535,
+      "title": "Layout API port",
+      "restart_required": true,
+      "description": "TCP port of the JSON Layout Player API the designer talks to (/layout, /hello, /screenshot)."
+    },
+    {
+      "name": "wake_host",
+      "type": "string",
+      "default": "",
+      "maxLength": 63,
+      "title": "Network wake host",
+      "restart_required": true,
+      "description": "Host running signalk-openwakeword (usually the SignalK server). Empty = on-device WakeNet (\"Hi ESP\")."
+    },
+    {
+      "name": "wake_word",
+      "type": "string",
+      "default": "okay_nabu",
+      "maxLength": 31,
+      "title": "Network wake word",
+      "restart_required": true,
+      "description": "Model name signalk-openwakeword must detect (must match a model the plugin loads). Only with a wake host."
+    }
+  ]
+}

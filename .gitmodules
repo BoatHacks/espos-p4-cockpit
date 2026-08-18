@@ -1,0 +1,3 @@
+[submodule "espos"]
+	path = espos
+	url = https://github.com/dirkwa/espOS.git

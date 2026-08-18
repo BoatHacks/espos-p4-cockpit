@@ -6,19 +6,24 @@ panel. The UI is JSON pushed via HTTP and rendered live with LVGL; no
 firmware rebuild per layout change. The device also acts as a SignalK ↔
 NMEA 2000 gateway (TWAI rx/tx + a candump TCP server on port 2599).
 
+2.x is a pure ESP-IDF 6 project on **espOS** (`espos/` submodule): WiFi,
+provisioning portal, config store + web UI, SignalK discovery / token /
+stream in and out (`espos_sk_subscribe`, `espos_sk_put`), logs, core dump
+and signed OTA are espOS; this repo is the panel on top. SensESP and
+PlatformIO are gone (1.x lives on `master`).
+
 Companion projects:
 - **signalk-hmi-designer** — the SignalK webapp that designs and pushes
   layouts. Lives at `../signalk-hmi-designer`.
-- **SensESP** — the released registry library, pinned
-  `SignalK/SensESP@^3.5.0` in `platformio.ini`. The local fork is
-  retired: `SKPrefixListener` (the wildcard path-family listener the
-  notifications registry needs) and the subscription-dedupe fix both
-  landed upstream in 3.5.0 (PRs #1048/#1049), and the earlier
-  `sendMeta=all` + `on_meta`→`SKMetadataListener` work is upstream too.
-  No `../SensESP` checkout is needed to build.
-- **sensesp-cockpit-display** / **sensesp-n2k-gateway** /
-  **sensesp-ble-gateway** — sister libs, symlinked, contribute HAL, OTA,
-  N2K gateway, candump server.
+- **espOS** — `../espOS` is the working checkout; `espos/` here is the
+  submodule pinned by commit. Generic device features go into espOS
+  (with host tests), panel-specific ones stay here.
+- **sensesp-cockpit-display / -n2k-gateway / -wyoming-satellite** — the 1.x
+  Arduino libraries, now folded into `components/` here (`cockpit_hal`,
+  `cockpit_voice`, `cockpit_n2k`). They stay in place for 1.x on `master`;
+  2.x does not link them. **sensesp-ble-gateway** is deliberately not
+  ported: 1.x linked it but never instantiated it, and BLE scanning
+  through the C6 is blocked upstream.
 
 ## Where to start reading
 
@@ -26,14 +31,15 @@ Companion projects:
 |-------------------------------------------------------|-------------------------------------------|
 | [README.md](README.md)                                | High-level overview + endpoint table      |
 | [JLP-PROTOCOL.md](JLP-PROTOCOL.md)                    | **The wire contract** — schema, endpoints, widget catalogue, alert overlay |
-| [src/main.cpp](src/main.cpp)                          | Boot sequence — single source of truth    |
-| [src/jlp/](src/jlp/)                                  | All player code                           |
-| [src/jlp/widgets/widget_factory.cpp](src/jlp/widgets/widget_factory.cpp) | Every widget kind in one file |
-| [src/jlp/layout/layout_manager.cpp](src/jlp/layout/layout_manager.cpp)   | Apply pipeline + atomic swap   |
-| [src/jlp/net/http_api.cpp](src/jlp/net/http_api.cpp)                    | `/hello`, `/layout`, `/screenshot`, `/healthz` |
-| [src/jlp/notifications_registry.cpp](src/jlp/notifications_registry.cpp)| Notifications + ack state              |
-| [src/jlp/alert_overlay.cpp](src/jlp/alert_overlay.cpp)                  | Full-screen alarm modal                |
-| [platformio.ini](platformio.ini)                                       | Toolchain pins + symlink lib_deps      |
+| [main/app_main.cpp](main/app_main.cpp)                | Boot sequence — single source of truth    |
+| [main/jlp/](main/jlp/)                                | All player code                           |
+| [main/jlp/widgets/widget_factory.cpp](main/jlp/widgets/widget_factory.cpp) | Every widget kind in one file |
+| [main/jlp/layout/layout_manager.cpp](main/jlp/layout/layout_manager.cpp)   | Apply pipeline + atomic swap   |
+| [main/jlp/net/http_api.cpp](main/jlp/net/http_api.cpp)                    | `/hello`, `/layout`, `/screenshot`, `/healthz` |
+| [main/jlp/notifications_registry.cpp](main/jlp/notifications_registry.cpp)| Notifications + ack state              |
+| [main/jlp/alert_overlay.cpp](main/jlp/alert_overlay.cpp)                  | Full-screen alarm modal                |
+| [components/cockpit_hal/](components/cockpit_hal/)    | Display/touch HAL, LVGL + the UI task (`ui::post/after/every`) |
+| [CMakeLists.txt](CMakeLists.txt) / [sdkconfig.defaults](sdkconfig.defaults) / [main/idf_component.yml](main/idf_component.yml) | Toolchain pin, config, registry deps |
 
 ## Architecture invariants
 
@@ -47,15 +53,20 @@ single feature.
 2. **No optimistic switch latch.** Toggle visual state derives from the
    subscription only. Press handlers PUT and rely on the SK echo to
    flip; a 500 ms reconciliation timer snaps back if no echo arrives.
-3. **LVGL is single-writer** on the `event_loop` task. The HTTP task
-   parses + validates, then marshals build/swap onto event_loop via
-   `event_loop()->onDelay(0, ...)`. SK listener consumers
-   (`SKValueListener`, `SKMetadataListener`, `SKPrefixListener`)
-   already fire on event_loop, so their `lv_*` work needs no
-   marshaling. No `lv_*` call from any other task. Ever.
-4. **OSS only**, programmatic LVGL API only — no LVGL Pro / XML
+3. **The DSI flush is asynchronous.** `esp_lcd_panel_draw_bitmap()` only
+   queues the copy; the flush callback must wait for `on_color_trans_done`
+   (`DisplayDriver::wait_flush_done()`) before `lv_display_flush_ready()`,
+   or LVGL overwrites the draw buffer mid-DMA and the panel flashes stale
+   strips.
+4. **LVGL is single-writer** on the `ui` task (`cockpit_hal::ui`). The
+   HTTP task parses + validates, then marshals build/swap with
+   `ui::post(...)`. espOS SignalK callbacks (`espos_sk_subscribe`) fire on
+   the stream task: copy the strings and `ui::post` before any `lv_*`
+   work. `ui::after/every` are LVGL timers (UI task). No `lv_*` call from
+   any other task. Ever.
+5. **OSS only**, programmatic LVGL API only — no LVGL Pro / XML
    runtime / GPL deps.
-5. **Wire format is additive.** New optional fields are fine. Removing
+6. **Wire format is additive.** New optional fields are fine. Removing
    a field, renaming, or changing semantics bumps `schema` from 1 → 2.
 
 ## Pipeline: parse → validate → stage → swap → persist
@@ -81,34 +92,36 @@ wins at runtime.
 
 ## SignalK wiring
 
-- The SK WS subscribes with `sendMeta=all` (SensESP default), so
-  metadata deltas arrive in-stream.
+- espOS opens the stream with `sendMeta=all`, so metadata deltas arrive
+  in-stream; `espos_sk_subscribe(path, …)` delivers values AND meta items
+  for that path to one callback.
 - `zone_registry` caches `{zones, description}` per path. The metadata
-  is fed by a per-path `SKMetadataListener` that `SubjectRegistry`
-  creates alongside each bound path's `SKValueListener` (the REST
-  cold-start fetch in `zone_fetch.cpp` also calls `apply_meta`).
+  is fed by the subscription `SubjectRegistry` opens for each bound path
+  (the REST cold-start fetch in `zone_fetch.cpp` also calls `apply_meta`).
   Widgets that bind a path read from it on every value change. Zones
   live in **raw SK units**; match against the raw value, not the
   display-scaled one.
 - `notifications_registry` observes the whole `notifications.*` family
-  via an `SKPrefixListener("notifications.")` (they're dynamic — no
-  per-path listener can cover them). Each notification is keyed by the
+  via one family subscription (`espos_sk_subscribe("notifications.*")` —
+  they're dynamic, no per-path subscription can cover them). Each notification is keyed by the
   path-after-prefix; the registry tracks `{state, message}` and an
   `acked_` map for the local-ack feature.
 - **ACKing a notification** sends an inbound SK delta with
-  `state: "normal"` via `SKWSClient::sendTXT`. SignalK PUT-to-path is
+  `state: "normal"` via `espos_sk_send_raw`. SignalK PUT-to-path is
   **not** wired through the server's notification manager — only the
   delta route is.
-- Toggles/buttons emit SK PUT via SensESP's `SKPutRequest<T>`. Per-kind
-  helpers in [src/jlp/net/sk_put.{h,cpp}](src/jlp/net/sk_put.h):
-  `put_bool`, `put_int`, `put_float`, `put_string`,
+- Toggles/buttons emit SK PUT via `espos_sk_put` (requestId tracked,
+  response logged). Per-kind helpers in
+  [main/jlp/net/sk_put.{h,cpp}](main/jlp/net/sk_put.h): `put_bool`,
+  `put_int`, `put_float`, `put_string`, `put_null`, `put_position`,
   `put_notification_ack` (delta-based).
 
 ## Subjects, listeners, lifetimes
 
 - `SubjectRegistry::get_or_create(path, kind)` lazily creates an
-  `lv_subject_t` per bound path and registers a SensESP
-  `SKValueListener<T>` that pushes incoming values into the subject.
+  `lv_subject_t` per bound path and opens an espOS subscription whose
+  callback pushes incoming values into the subject (on the UI task).
+  `garbage_collect` unsubscribes paths no layout uses (subjects stay).
 - Subjects survive layout swaps; same path bound to the same kind is
   reused. **Kind conflicts** (e.g. one widget wants Float, another
   wants Int on the same path) are caught at validate-time and reject
@@ -123,57 +136,34 @@ wins at runtime.
 ## Build / flash / debug
 
 ```bash
-scripts/build.sh -e p4_cockpit         # build (7B, the default)
-pio run -e p4_cockpit -t upload        # flash via /dev/ttyACM0
-pio device monitor                     # local serial
-nc <device-ip> 2323                    # remote ESP-IDF log stream
+. ~/esp-idf-v6.0.2/export.sh           # the version in .idf-version
+scripts/build.sh                       # nice'd idf.py build, one at a time
+idf.py -p /dev/ttyACM0 flash monitor
 curl -sf http://<device-ip>:8081/hello | jq .
+curl -sf "http://<device-ip>/api/v1/logs?limit=200" | jq -r '.lines[]'   # espOS log ring
 ```
 
-Prefer `scripts/build.sh` over a bare `pio run` on a small machine: a
-full ESP-IDF build otherwise saturates every core (load ~8 on a 4-core
-Pi) and the editor/SSH session stops being scheduled. The wrapper runs
-the build at `nice -n 15`, `ionice -c3` and `-j $(nproc)-1` so one core
-stays free for interactive work, and holds a lock so two builds can never
-run at once (two concurrent `pio run`s put ~2x the core count of
-compilers on the machine and drop the editor regardless of nice level;
-they also race on `.pio/`). A second invocation waits for the first;
-`BUILD_NOWAIT=1` makes it fail fast instead. It takes the same arguments
-as `pio run`.
+Prefer `scripts/build.sh` over a bare `idf.py build` on a small machine:
+a full build saturates every core and the editor/SSH session stops being
+scheduled. The wrapper runs at `nice -n 15`, `ionice -c3`, `-j nproc-1`
+and holds a lock so two builds never race on `build/`.
 
-Two board targets share a common `[common]` base in `platformio.ini`:
-
-- `p4_cockpit` — Waveshare 7B (1024×600 EK79007), onboard N2K gateway.
-- `p4_cockpit_4b` — Waveshare 4B (720×720 ST7703). The 4B has no CAN
-  transceiver, so `COCKPIT_BOARD_4B` compiles the N2K gateway out and
-  swaps the board HAL. Build/flash with `-e p4_cockpit_4b`.
-
-`/hello` reports the live panel geometry from the active HAL
-(`display.w`/`display.h`), so the designer maps its canvas to whichever
-board is connected.
+Boards: the 7B (1024×600 EK79007) is the target; the 4B HAL is parked
+until a board is on hand (`components/esp_lcd_st7703` is excluded from the
+build in CMakeLists.txt). `/hello` reports the live panel geometry.
 
 If flashing dies with `OSError: [Errno 71] Protocol error` on
 `_setDTRandRTS`, the cdc_acm CDC state is stuck. Manual download mode
 (hold BOOT, tap RESET, release BOOT) always works; replug also helps.
 
-### LVGL 9.5 helium asm
+### Dependencies
 
-LVGL 9.5 ships `src/draw/sw/blend/helium/lv_blend_helium.S` which the
-RISC-V toolchain can't assemble. `scripts/strip_lvgl_helium.py` runs
-pre-build and deletes the directory. **Don't** remove the script or its
-`extra_scripts` entry in `platformio.ini` without solving the upstream
-problem.
-
-### SensESP dependency
-
-`SensESP=SignalK/SensESP@^3.5.0` in `lib_deps` is named explicitly so
-this pin wins over the transitive `SignalK/SensESP>=3.3.0` the sister
-libs declare. It resolves the released library from the registry into
-`.pio/libdeps/<env>/SensESP` — no local checkout. Everything the
-firmware relies on (`SKValueListener`, `SKMetadataListener`,
-`SKPrefixListener`, `sendMeta=all`) is in 3.5.0. Bump the pin to adopt a
-newer release; the local fork that used to live at `../SensESP` is
-retired.
+Registry components are pinned in `main/idf_component.yml` and
+`components/*/idf_component.yml` (lvgl 9.x, ArduinoJson 7, esp_new_jpeg,
+mdns, esp_hosted + esp_wifi_remote for the P4's C6 radio); espOS pins its
+own. LVGL is configured by `components/cockpit_hal/lv_conf.h`
+(`LV_CONF_PATH`, Kconfig LVGL is switched off). `managed_components/` is
+not committed.
 
 ## Adding a widget kind
 
@@ -207,18 +197,20 @@ designer refuses to push widget kinds the device doesn't advertise.
 
 | Task              | Touches LVGL? | Notes |
 |-------------------|---------------|-------|
-| `event_loop` task | yes           | LVGL tick + listener callbacks + layout build/swap + alert overlay |
-| `httpd_api` (8081)| no directly   | Parses + validates POSTs, marshals to event_loop, waits on completion semaphore |
-| `httpd_ota` (8080)| no            | OTA only |
-| `remote_log` (2323)| no           | TCP log forwarder |
+| `ui` task         | yes           | `lv_timer_handler`, `ui::post` queue, `ui::after/every` timers, layout build/swap, alert overlay |
+| `httpd_api` (8081)| no directly   | Parses + validates POSTs, marshals to the UI task, waits on completion semaphore |
+| espOS httpd (80)  | no            | web UI + REST (config, OTA, logs, core dump) |
 | `esp_timer` 1 ms  | no            | `lv_tick_inc(1)` only — lock-free |
-| SK WS task        | no            | Receives raw deltas onto a queue; `process_received_updates` drains + dispatches to listeners on the event_loop task |
-| `audio` task      | no            | Drains the chime clip queue; blocking I2S write to the ES8311. `WaveshareAudio::play_pcm` (called from event_loop) copies + enqueues, never blocks |
+| `espos_skws` task | no            | espOS SignalK stream; subscription callbacks run here and `ui::post` their work |
+| `audio` task      | no            | Drains the chime clip queue; blocking I2S write to the ES8311. `WaveshareAudio::play_pcm` (called from the UI task) copies + enqueues, never blocks |
+| `wyoming_*` tasks | no            | Voice satellite: TCP server, mic streaming, wake feed/fetch (esp-sr AFE) |
+| `twai_rx` / candump | no          | N2K receive + per-client fan-out to the candump TCP server |
 
 ## Repo conventions
 
-- **Build/test gate**: `pio run -e p4_cockpit` must succeed. There are
-  no host tests today — verify on device via remote log + curl probes.
+- **Build/test gate**: `idf.py build` must succeed. There are no host
+  tests in this repo (espOS has them) — verify on device via the espOS
+  log ring + curl probes.
 - **Commits and PR titles**: Angular Conventional Commits —
   `type(scope): subject`, imperative, subject ≤ 50 chars. Types:
   `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `build`, `ci`,
@@ -226,12 +218,11 @@ designer refuses to push widget kinds the device doesn't advertise.
   generated from PR titles, so a vague title becomes a vague changelog
   entry. Commits stay focused and atomic.
 - **Never commit local/boat configuration.** No WiFi SSIDs or
-  passwords, no server IPs, no personal wake words — not in source,
-  `platformio.ini`, or sdkconfig. `strings` on a firmware image prints
-  every one of them, and the merged binary is a public release asset.
-  Anything site-specific is a build-time `-D` with an empty default, so
-  a stock build ships unprovisioned and comes up on the SensESP config
-  portal.
+  passwords, no server IPs, no personal wake words — not in source or
+  sdkconfig. `strings` on a firmware image prints every one of them, and
+  the merged binary is a public release asset. Site config lives in NVS
+  (espOS provisioning image or the setup portal); the signing key is
+  git-ignored.
 - **Never auto-commit, never auto-push.** Do both only when the user
   explicitly asks.
 - **No release-flow work** (version bumps, tags) unless the user says

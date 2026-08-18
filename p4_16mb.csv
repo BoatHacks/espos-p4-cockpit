@@ -1,28 +1,16 @@
-# Partition table for Waveshare ESP32-P4-WIFI6-POE-ETH (16 MB flash).
-# Two 6.5 MB OTA app slots, a dedicated NVS partition for the layout
-# store, a SPIFFS partition SensESP's config system still mounts, 256 KB
-# coredump.
-# The layout store moved from the old "spiffs" LittleFS partition to the
-# dedicated "layout" NVS partition: LittleFS on this flash did not
-# survive a power-cycle (the superblock came back unmountable and got
-# silently reformatted, dropping the persisted layout). NVS is
-# wear-leveled and power-fail-safe — the same store WiFi creds use.
-# The "spiffs" partition is kept (smaller) because SensESP mounts it
-# fatally at boot for its Saveable config system.
-# Name,    Type, SubType, Offset,   Size,    Flags
-nvs,       data, nvs,     0x9000,   0x5000,
-otadata,   data, ota,     0xe000,   0x2000,
-app0,      app,  ota_0,   0x10000,  0x680000,
-app1,      app,  ota_1,   0x690000, 0x680000,
-layout,    data, nvs,     0xD10000, 0x20000,
-# The SPIFFS partition MUST come before "model": SensESP calls
-# SPIFFS.begin(true) with no label, which mounts the FIRST spiffs-subtype
-# partition and formats it on mount-failure. If "model" (a raw srmodels.bin,
-# not a SPIFFS image) were first, that format would wipe the wake model on
-# every boot. Keeping spiffs first makes SPIFFS grab spiffs, not the model.
-spiffs,    data, spiffs,  0xD30000, 0xE0000,
-# esp-sr WakeNet models (srmodels.bin). Named "model" (esp-sr's flash hook
-# targets that exact label) and given the "fat" subtype so SPIFFS.begin()
-# never picks it (esp_srmodel_init uses SUBTYPE_ANY, so it doesn't care).
-model,     data, fat,     0xE10000, 0x100000,
-coredump,  data, coredump,0xF10000, 0x40000,
+# Waveshare ESP32-P4 16 MB flash. Two 6.5 MB OTA slots (LVGL + esp-sr + hosted
+# WiFi/BLE make a big image), the espOS partitions (nvs, otadata, phy, nvs_keys,
+# coredump, storage = gzipped web UI), the cockpit's own NVS "layout" store, and
+# the esp-sr WakeNet "model" partition kept at its historical offset so a model
+# flashed by the 1.x firmware survives. Offsets are explicit on purpose.
+# Name,     Type, SubType,  Offset,   Size,     Flags
+nvs,        data, nvs,      0x9000,   0x6000,
+otadata,    data, ota,      0xf000,   0x2000,
+phy_init,   data, phy,      0x11000,  0x1000,
+nvs_keys,   data, nvs_keys, 0x12000,  0x1000,   encrypted
+coredump,   data, coredump, 0x13000,  0x40000,
+ota_0,      app,  ota_0,    0x60000,  0x680000,
+ota_1,      app,  ota_1,    0x6E0000, 0x680000,
+layout,     data, nvs,      0xD60000, 0x20000,
+storage,    data, littlefs, 0xD80000, 0x90000,
+model,      data, fat,      0xE10000, 0x100000,

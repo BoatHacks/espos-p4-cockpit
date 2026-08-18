@@ -1,100 +1,100 @@
-# ESP32-P4 Cockpit — native LVGL display
+# sensesp-p4-cockpit on espOS — project defaults (ESP32-P4 only for now).
+# Mirrors espos/sdkconfig.defaults + espos/sdkconfig.defaults.esp32p4, plus
+# the panel: 16 MB flash, HEX PSRAM, LVGL buffers, hosted WiFi/BLE on the C6.
 
-CONFIG_AUTOSTART_ARDUINO=y
-
-# Silicon revision (ES die)
-CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
-CONFIG_ESP32P4_REV_MIN_1=y
-
-# Flash / PSRAM / CPU
-CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
-CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
-CONFIG_ESPTOOLPY_FLASHFREQ="80m"
-CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
-CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
-CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
-CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=360
-CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_HEX=y
-CONFIG_SPIRAM_SPEED_200M=y
-# Relocate WiFi/LWIP dynamic buffers off scarce internal RAM into the
-# 32 MB PSRAM. The panel boots with ~168 KB internal free but drops to
-# ~33 KB once the WS + 36-path layout load — already below the 40 KB
-# watchdog line, so nav-data/reconnect bursts underway tip it into the
-# "internal RAM exhausted" reboot. These buffers are the biggest
-# internal-RAM consumer and don't need to live there.
-CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
-
-# Partition table
+# ---- Partitions
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="p4_16mb.csv"
 CONFIG_PARTITION_TABLE_FILENAME="p4_16mb.csv"
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 
-# FreeRTOS
-CONFIG_FREERTOS_HZ=1000
+# ---- Chip / memory
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_100=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH=4096
+CONFIG_FREERTOS_HZ=1000
 
-# WiFi via esp_hosted (C6 companion)
-CONFIG_ESP_HOSTED_ENABLED=y
-CONFIG_ESP_WIFI_ENABLED=y
+# ---- Hosted WiFi over SDIO (ESP32-C6 on the Waveshare boards)
+CONFIG_ESP_HOSTED_SDIO_HOST_INTERFACE=y
+CONFIG_ESP_HOSTED_SDIO_SLOT_1=y
+CONFIG_ESP_HOSTED_SDIO_4_BIT_BUS=y
+CONFIG_ESP_HOSTED_SDIO_PIN_CLK=18
+CONFIG_ESP_HOSTED_SDIO_PIN_CMD=19
+CONFIG_ESP_HOSTED_SDIO_PIN_D0=14
+CONFIG_ESP_HOSTED_SDIO_PIN_D1=15
+CONFIG_ESP_HOSTED_SDIO_PIN_D2=16
+CONFIG_ESP_HOSTED_SDIO_PIN_D3=17
+CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_HIGH=y
+CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE=54
+CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=40000
 
-# Bluetooth (Bluedroid via C6 over esp_hosted)
-CONFIG_BT_ENABLED=y
-CONFIG_BT_BLUEDROID_ENABLED=y
-CONFIG_BT_CONTROLLER_DISABLED=y
-CONFIG_BT_BLE_ENABLED=y
-CONFIG_BT_GATTC_ENABLE=y
-CONFIG_BT_GATTS_ENABLE=n
-CONFIG_BT_CLASSIC_ENABLED=n
-# Legacy BLE 4.2 APIs — known working with C6 esp_hosted HCI bridge
-CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y
-CONFIG_BT_BLE_50_FEATURES_SUPPORTED=n
-# WiFi/BLE coexistence
-CONFIG_SW_COEXIST_ENABLE=y
-CONFIG_BT_BTU_TASK_STACK_SIZE=8192
-CONFIG_BT_ACL_CONNECTIONS=4
-CONFIG_BLE_MESH=n
-# esp_hosted BT → C6 via SDIO
-CONFIG_ESP_HOSTED_ENABLE_BT_BLUEDROID=y
-CONFIG_ESP_HOSTED_BLUEDROID_HCI_VHCI=y
+# ---- Logging / HTTP server (espOS)
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+CONFIG_HTTPD_MAX_URI_LEN=512
+CONFIG_HTTPD_ERR_RESP_NO_DELAY=y
+CONFIG_ESPOS_HTTPD_MAX_URI_HANDLERS=64
+CONFIG_ESPOS_SK_RX_FRAME_MAX=65536
 
-# TWAI / CAN bus (N2K gateway)
-CONFIG_TWAI_ERRATA_FIX_LISTEN_ONLY_DOM=y
-
-# LWIP — maximum TCP buffers per esp_hosted performance_optimization.md
+# ---- lwIP: the panel streams and serves layouts/screenshots
 CONFIG_LWIP_TCP_SND_BUF_DEFAULT=65534
 CONFIG_LWIP_TCP_WND_DEFAULT=65534
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=64
 CONFIG_LWIP_UDP_RECVMBOX_SIZE=64
 CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
-
-# More sockets so the SensESP web UI's parallel browser fetches
-# (6-10 concurrent connections) aren't refused by httpd's default
-# max_open_sockets=7 (only 4 usable after 3 reserved).
 CONFIG_LWIP_MAX_SOCKETS=16
 
-# Raise lwIP TCP/IP task priority so it drains SDIO RX faster than
-# application tasks can re-fill it. Catches "task still writing Rx data
-# to queue!" floods under heavy parallel HTTP load (e.g. web UI).
-# Note: 64 is the max RECVMBOX size without enabling LWIP_WND_SCALE.
-CONFIG_LWIP_TCPIP_TASK_PRIO=23
+# ---- Core dump, OTA rollback, signed images (espOS)
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y
+CONFIG_SECURE_SIGNED_APPS_RSA_SCHEME=y
+CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y
+CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=y
+CONFIG_SECURE_BOOT_SIGNING_KEY="secure_boot_signing_key.pem"
+CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
 
-# WiFi Remote — moderate profile. The #184 high-throughput profile
-# (RX/TX 64, BA win 32) was sized for bulk transfer; this panel is a
-# low-rate SignalK telemetry consumer, so halve the dynamic buffer
-# counts and BA windows to reclaim internal RAM. Bump back up only if a
-# throughput regression (e.g. OTA, screenshot) actually appears.
-CONFIG_WIFI_RMT_STATIC_RX_BUFFER_NUM=16
-CONFIG_WIFI_RMT_DYNAMIC_RX_BUFFER_NUM=32
-CONFIG_WIFI_RMT_DYNAMIC_TX_BUFFER_NUM=32
-CONFIG_WIFI_RMT_AMPDU_TX_ENABLED=y
-CONFIG_WIFI_RMT_TX_BA_WIN=16
-CONFIG_WIFI_RMT_AMPDU_RX_ENABLED=y
-CONFIG_WIFI_RMT_RX_BA_WIN=16
-
-
-# Misc
-CONFIG_MBEDTLS_PSK_MODES=y
-CONFIG_MBEDTLS_KEY_EXCHANGE_PSK=y
-CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+# ---- LVGL runs on its own task with a big stack; C++ app
+CONFIG_COMPILER_CXX_EXCEPTIONS=n
 CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=n
+
+# ---- LVGL: configured by components/cockpit_hal/lv_conf.h (LV_CONF_PATH), not Kconfig
+CONFIG_LV_CONF_SKIP=n
+CONFIG_LV_BUILD_EXAMPLES=n
+CONFIG_LV_BUILD_DEMOS=n
+
+# ---- esp-sr: on-device wake word "Hi ESP" (WakeNet 9) from the "model" partition
+CONFIG_MODEL_IN_FLASH=y
+CONFIG_AFE_INTERFACE_V1=y
+CONFIG_SR_NSN_WEBRTC=y
+CONFIG_SR_VADN_WEBRTC=y
+CONFIG_SR_WN_WN9_HIESP=y
+CONFIG_SR_MN_CN_NONE=y
+CONFIG_SR_MN_EN_NONE=y
+
+# ---- Internal RAM at boot is the scarce resource on the P4 (RETENT_RAM ~100 KiB
+# after .data/.bss; esp_hosted allocates ~130 KiB before app_main and the main
+# task must still find a home). Keep hosted's task stacks in PSRAM and a few
+# IDF hot paths in flash instead of IRAM. Symptom otherwise:
+# "assert failed: esp_startup_start_app app_startup.c:83 (res == pdTRUE)".
+CONFIG_ESP_HOSTED_DFLT_TASK_FROM_SPIRAM=y
+CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
+CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y
+CONFIG_HEAP_PLACE_FUNCTION_INTO_FLASH=y
+CONFIG_RINGBUF_PLACE_FUNCTIONS_INTO_FLASH=y
+CONFIG_WIFI_RMT_IRAM_OPT=n
+CONFIG_WIFI_RMT_RX_IRAM_OPT=n
+CONFIG_WIFI_RMT_EXTRA_IRAM_OPT=n
+
+# ---- N2K gateway: TWAI (legacy driver API kept from 1.x; migration to esp_twai pending)
+CONFIG_TWAI_SUPPRESS_DEPRECATE_WARN=y
+CONFIG_TWAI_ERRATA_FIX_LISTEN_ONLY_DOM=y

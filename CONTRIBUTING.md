@@ -6,7 +6,7 @@ Bug reports, feature requests and pull requests are welcome at
 Before opening a pull request, make sure the firmware still builds:
 
 ```bash
-pio run -e p4_cockpit
+idf.py build
 ```
 
 Follow the conventions in [AGENTS.md](AGENTS.md): Angular-style commit and PR
