@@ -23,6 +23,12 @@ if [ -z "${IDF_PATH:-}" ]; then
   echo "==> IDF_PATH not set: source the export.sh of ESP-IDF $(cat .idf-version)" >&2
   exit 1
 fi
-CORES=$(nproc)
-JOBS=$(( CORES > 1 ? CORES - 1 : 1 ))
-exec nice -n 15 ionice -c 3 idf.py -j "$JOBS" "${@:-build}"
+
+# IDF 6's idf.py has no -j option; parallelism is ninja's. Configure via
+# idf.py (component manager, sdkconfig), then compile with a capped ninja.
+JOBS="${BUILD_JOBS:-3}"
+if [ $# -gt 0 ] && [ "$1" != "build" ]; then
+  exec nice -n 15 ionice -c 3 idf.py "$@"
+fi
+nice -n 15 ionice -c 3 idf.py reconfigure
+exec nice -n 15 ionice -c 3 ninja -C build -j "$JOBS"

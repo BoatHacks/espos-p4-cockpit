@@ -25,6 +25,9 @@
 #include "lvgl.h"
 
 #include "cockpit_hal/waveshare_audio.h"
+#include "cockpit_n2k/candump_tcp_server.h"
+#include "cockpit_n2k/twai_receiver.h"
+#include "cockpit_n2k/twai_transmitter.h"
 #include "cockpit_hal/ui.h"
 #include "cockpit_hal/waveshare_7b.h"
 #include "cockpit_voice/wyoming_satellite.h"
@@ -66,6 +69,8 @@ namespace {
 // layout fetch and zone seed fire once, on the first connect.
 bool s_boot_fetch_done = false;
 bool s_last_connected = false;
+cockpit_n2k::TwaiReceiver* s_n2k_rx = nullptr;
+cockpit_n2k::CandumpTcpServer* s_n2k_server = nullptr;
 
 void poll_sk_state() {
   espos_sk_ws_status_t ws;
@@ -107,7 +112,8 @@ void poll_status_line() {
   } else {
     jlp::overlay().set_wifi("down");
   }
-  jlp::overlay().set_n2k(-1, 0);   // N2K gateway: phase 3
+  int64_t rx_idle = (s_n2k_rx && s_n2k_rx->ever_received()) ? s_n2k_rx->seconds_since_last_rx() : -1;
+  jlp::overlay().set_n2k(rx_idle, s_n2k_server ? s_n2k_server->connected_clients() : 0);
   jlp::overlay().set_uptime_heap((uint32_t)(esp_timer_get_time() / 1000000), esp_get_free_heap_size());
 }
 
@@ -124,10 +130,18 @@ void health_check() {
   } else if (esp_get_free_heap_size() < 64 * 1024) {
     ok = false;
     reason = "heap exhausted";
-  } else if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < 40 * 1024 ||
-             heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) < 12 * 1024) {
+    // Internal RAM is the scarce resource on the P4 (esp_hosted, LVGL and
+    // the esp-sr AFE all want DMA-capable RAM). The wake pipeline dips to
+    // ~24 KB free / ~23 KB largest block while it allocates, then settles
+    // near 95 KB — thresholds sit below that trough, not below the steady
+    // state, or the panel reboots itself every boot.
+  } else if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < 16 * 1024 ||
+             heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) < 8 * 1024) {
     ok = false;
     reason = "internal RAM exhausted";
+  } else if (s_n2k_rx && s_n2k_rx->ever_received() && s_n2k_rx->seconds_since_last_rx() > 30) {
+    ok = false;
+    reason = "n2k rx stalled";
   }
   if (!ok) {
     consecutive_fail++;
@@ -262,7 +276,9 @@ extern "C" void app_main(void) {
     cockpit_hal::ui::every(1000, [] { poll_sk_state(); poll_status_line(); });
     cockpit_hal::ui::every(30000, health_check);
     cockpit_hal::ui::every(5000, [] {
-      ESP_LOGI(TAG, "heap=%lu iram=%u iram_min=%u iram_big=%u psram=%lu",
+      ESP_LOGI(TAG, "n2k: rx_idle=%llds cl=%u | heap=%lu iram=%u iram_min=%u iram_big=%u psram=%lu",
+               (long long)((s_n2k_rx && s_n2k_rx->ever_received()) ? s_n2k_rx->seconds_since_last_rx() : -1),
+               s_n2k_server ? (unsigned)s_n2k_server->connected_clients() : 0u,
                (unsigned long)esp_get_free_heap_size(), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
@@ -275,6 +291,16 @@ extern "C" void app_main(void) {
   ESP_ERROR_CHECK(espos_wifi_start());
   ESP_ERROR_CHECK(espos_sk_start());
   ESP_ERROR_CHECK(espos_ota_start());
+
+  // ---- NMEA 2000 gateway: TWAI rx/tx + candump TCP server (:2599)
+  static cockpit_n2k::TwaiReceiver n2k_rx(cockpit_n2k::TwaiReceiverConfig::waveshare_touch_lcd_7b());
+  static cockpit_n2k::TwaiTransmitter n2k_tx;
+  static cockpit_n2k::CandumpTcpServer n2k_server(&n2k_rx, &n2k_tx);
+  s_n2k_rx = &n2k_rx;
+  s_n2k_server = &n2k_server;
+  n2k_rx.start();
+  n2k_tx.start();
+  n2k_server.start();
 
   // ---- the layout push API (designer) on its own port + mDNS
   int32_t api_port = 8081;
