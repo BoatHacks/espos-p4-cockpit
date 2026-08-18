@@ -9,6 +9,7 @@
 #include "driver/ledc.h"
 #include "esp_lcd_ek79007.h"
 #include "esp_ldo_regulator.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 
 static const char* TAG = "ws7b";
@@ -24,6 +25,15 @@ static constexpr uint16_t kStatusReg = 0x814E;
 static constexpr uint16_t kPointReg = 0x814F;
 
 namespace cockpit_hal {
+
+// Runs from the DSI ISR. CONFIG_LCD_DSI_ISR_CACHE_SAFE keeps that ISR
+// alive while the cache is disabled (flash writes), so everything it
+// reaches must be in IRAM — hence a free function, not a lambda.
+static IRAM_ATTR bool trans_done_isr(esp_lcd_panel_handle_t, esp_lcd_dpi_panel_event_data_t*, void* ctx) {
+  BaseType_t woken = pdFALSE;
+  xSemaphoreGiveFromISR(static_cast<SemaphoreHandle_t>(ctx), &woken);
+  return woken == pdTRUE;
+}
 
 void Waveshare7BDisplay::init() {
   init_ldo();
@@ -72,11 +82,7 @@ void Waveshare7BDisplay::init() {
   // torn/stale strips (a periodic full-width flash).
   trans_done_ = xSemaphoreCreateBinary();
   esp_lcd_dpi_panel_event_callbacks_t cbs = {};
-  cbs.on_color_trans_done = [](esp_lcd_panel_handle_t, esp_lcd_dpi_panel_event_data_t*, void* ctx) -> bool {
-    BaseType_t woken = pdFALSE;
-    xSemaphoreGiveFromISR(static_cast<SemaphoreHandle_t>(ctx), &woken);
-    return woken == pdTRUE;
-  };
+  cbs.on_color_trans_done = trans_done_isr;
   ESP_ERROR_CHECK(esp_lcd_dpi_panel_register_event_callbacks(panel_, &cbs, trans_done_));
   gpio_set_level(kResetGpio, 1);
   ESP_ERROR_CHECK(esp_lcd_panel_init(panel_));

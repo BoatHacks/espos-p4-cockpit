@@ -98,3 +98,11 @@ CONFIG_WIFI_RMT_EXTRA_IRAM_OPT=n
 # ---- N2K gateway: TWAI (legacy driver API kept from 1.x; migration to esp_twai pending)
 CONFIG_TWAI_SUPPRESS_DEPRECATE_WARN=y
 CONFIG_TWAI_ERRATA_FIX_LISTEN_ONLY_DOM=y
+
+# ---- MIPI-DSI refresh must survive a disabled cache.
+# The DPI stream is fed by a DMA ISR. With the ISR in flash (the default),
+# every cache-disabling flash operation — an NVS commit from the layout
+# store, a core-dump write, an OTA erase — stalls it, the DPI stream
+# underruns and the whole panel blanks for an instant. Symptom: periodic
+# full-screen flicker on any layout.
+CONFIG_LCD_DSI_ISR_CACHE_SAFE=y
