@@ -97,9 +97,17 @@ jobs:
       # pointed at by URL; the merged image is the USB/full-flash one.
       - name: Stage release assets
         if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        env:
+          # Via env, not ${{ }}: a tag name is arbitrary text and would
+          # otherwise be pasted into this script before bash parses it.
+          TAG: ${{ github.event.release.tag_name }}
         run: |
-          VERSION="${{ github.event.release.tag_name }}"
-          VERSION="${VERSION:-$(cat version.txt)}"
+          # Manual runs are not releases: tag them with the commit so two
+          # dispatch builds are never indistinguishable on disk.
+          VERSION="${TAG:-$(cat version.txt)-g$(git rev-parse --short HEAD)}"
+          case "$VERSION" in
+            *[!A-Za-z0-9._-]*) echo "::error::refusing unsafe tag '$VERSION'"; exit 1 ;;
+          esac
           mkdir -p dist
           cp p4_cockpit-merged.bin "dist/p4_cockpit-${VERSION}-merged.bin"
           cp build/cockpit.bin     "dist/p4_cockpit-${VERSION}-ota.bin"
