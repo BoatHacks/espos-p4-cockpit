@@ -624,6 +624,10 @@ esp_err_t hello_get(httpd_req_t* req) {
       if (espos_wifi_get_status(&w) == ESP_OK) snprintf(host, sizeof(host), "%s", w.hostname);
     }
     resp["hostname"] = host[0] ? host : "cockpit";
+    // The designer gates pushes on this string and parses a trailing
+    // M.m.p out of it (schema.ts firmwareMeets), so anything after the
+    // numbers — a "-dev" suffix, a git-describe hash — reads as "version
+    // unknown" and it refuses to push. Keep the numeric version last.
     static char fw[64];
     snprintf(fw, sizeof(fw), "p4-cockpit-jlp-%s", esp_app_get_description()->version);
     resp["firmware"] = fw;
