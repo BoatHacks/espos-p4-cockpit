@@ -2,6 +2,15 @@
 
 ESP32-P4 firmware for the [Waveshare ESP32-P4-WIFI6-Touch-LCD-7B](https://www.waveshare.com/wiki/ESP32-P4-WIFI6-Touch-LCD-7B) — a 1024×600 capacitive-touch helm display that doubles as an NMEA 2000 ↔ SignalK gateway.
 
+**2.x runs on [espOS](https://github.com/dirkwa/espOS)** (pure ESP-IDF 6, no
+Arduino, no SensESP): WiFi + provisioning portal, the config store and web
+UI, SignalK discovery / access token / delta stream in both directions,
+logs, core dumps and signed OTA with rollback all come from the `espos/`
+submodule; this repository is the panel on top — display HAL, LVGL, the
+JSON Layout Player and (in later 2.x phases) audio/voice, the N2K gateway
+and the BLE gateway. 1.x (PlatformIO + SensESP) lives on the `master`
+branch until 2.x reaches feature parity.
+
 The UI is **runtime-loadable**: instead of rebuilding firmware per layout change, the device boots a JSON layout, renders it with LVGL widgets, and binds each widget to a SignalK path over WebSocket. Push a new layout via HTTP from [signalk-hmi-designer](https://github.com/dirkwa/signalk-hmi-designer) and the screen swaps atomically — no flash, no reboot.
 
 ## Capabilities
@@ -18,16 +27,18 @@ The UI is **runtime-loadable**: instead of rebuilding firmware per layout change
 - **Configurable font size** on `label` / `value` widgets via `display.font_size`.
 - Always-on status overlay (WiFi, SK WS, N2K rx age, heap, uptime) survives every layout swap.
 - **NMEA 2000 gateway** — TWAI receiver/transmitter plus a candump-style TCP server (port 2599) so the bus is reachable from a laptop.
-- **Persistence** — successful pushes are saved to LittleFS so the layout survives a power cycle, with a compiled-in default fallback.
+- **Persistence** — successful pushes are saved to the `layout` NVS partition so the layout survives a power cycle, with a compiled-in default fallback.
 - **Boot-time fetch** from SK `applicationData` so a fresh device picks up the fleet's last-known layout.
 - mDNS-announced as `_signalk-player._tcp` so designers can discover it.
-- HTTP OTA on port 8080.
+- Everything else a device needs — WiFi setup portal, config UI at `http://<device>/`, SignalK server discovery + access request, signed OTA from a URL or a version manifest with automatic rollback, log ring and core-dump viewer — is espOS ([its docs](https://github.com/dirkwa/espOS/tree/main/docs)).
+
+Port status (2.x): display, layouts, SK values/meta/notifications, anchor PUTs and the layout API are live; audio/voice, the N2K gateway and the BLE gateway are being ported phase by phase and compile against inert stand-ins until then.
 
 ## Boot priority chain
 
 The device never blanks. At boot the JLP applies layouts in this order, and any later push from `POST /layout` (the design loop) takes precedence at runtime:
 
-1. **LittleFS** — `/lfs/layout.json` from the last successful push.
+1. **NVS `layout` partition** — the last successful push.
 2. **Compiled-in default** — minimal "no layout pushed yet" fallback in `default_layout.h`.
 3. **SignalK `applicationData`** — async GET, applied if it differs from what's already on screen.
 
@@ -38,12 +49,11 @@ If a pushed or fetched layout fails parse/validate/build, the previous layout st
 | Port | Method | Endpoint        | Purpose                                       |
 |------|--------|-----------------|-----------------------------------------------|
 | 8081 | GET    | `/hello`        | Capability descriptor (schema, widgets, display, active layout, screenshot formats) |
-| 8081 | POST   | `/layout`       | Apply a layout JSON (≤64 KB), atomic swap + LittleFS persist |
+| 8081 | POST   | `/layout`       | Apply a layout JSON (≤64 KB), atomic swap + NVS persist |
 | 8081 | GET    | `/screenshot`   | Framebuffer dump. Default: software-encoded JPEG. `?fmt=bmp` for the legacy RGB565 BMP. |
 | 8081 | GET    | `/healthz`      | Liveness probe                                |
-| 8080 | POST   | (firmware OTA)  | Upload a new firmware bin                     |
-| 2599 | TCP    | (candump)       | Stream raw N2K frames in candump format       |
-| 2323 | TCP    | (remote log)    | Live ESP-IDF log stream                       |
+| 80   | *      | `/`, `/api/v1/…` | espOS web UI + REST API (config, WiFi, SignalK, OTA, logs, core dump) |
+| 2599 | TCP    | (candump)       | Stream raw N2K frames in candump format (phase 3) |
 
 The full contract — request/response shapes, schema, widget fields, error codes — is in [JLP-PROTOCOL.md](JLP-PROTOCOL.md).
 
@@ -57,9 +67,9 @@ The full contract — request/response shapes, schema, widget fields, error code
                                   │
                                   ▼
         ┌───────────────────────────────────────────────┐
-        │ JLP LayoutManager (event_loop task, LVGL-only)│
+        │ JLP LayoutManager (UI task, LVGL-only)        │
         │  parse → validate → stage (hidden) → swap     │
-        │                                  → LittleFS   │
+        │                                  → NVS store  │
         │                  → idle_dimmer.configure(...)  │
         │                  → alert_overlay.configure(...)│
         └───────────────────────────────────────────────┘
@@ -75,7 +85,8 @@ The full contract — request/response shapes, schema, widget fields, error code
    └───────────────────────┘                  │ on_meta / on_value
                                               │ + REST /meta fetch
                                        ┌──────────────┐
-                                       │ SensESP WS   │──> SK server
+                                       │ espOS SK     │──> SK server
+                                       │ stream       │
                                        │ (sendMeta=all)│
                                        └──────────────┘
 
@@ -84,7 +95,7 @@ The full contract — request/response shapes, schema, widget fields, error code
    └───────────────────────────────┘
 ```
 
-LVGL is single-threaded. The HTTP task parses + validates a posted layout, then trampolines the build/swap onto the `event_loop` task via `event_loop()->onDelay(0, ...)` so only one task ever touches LVGL.
+LVGL is single-threaded. One FreeRTOS task (`cockpit_hal::ui`) owns it; the HTTP task parses + validates a posted layout, then hands the build/swap over with `ui::post(...)`, and espOS' SignalK stream callbacks do the same for values, meta and notifications, so only one task ever touches LVGL.
 
 The **status overlay** sits above the layout tabview in z-order and is created once at boot; it survives every layout swap. The **alert overlay** sits above the status overlay and pops up whenever an incoming notification clears the configured `min_state` threshold.
 
@@ -113,52 +124,57 @@ Wake sources:
 
 ## Build & flash
 
-PlatformIO with the pioarduino ESP32-P4 build:
+Pure ESP-IDF, pinned to the version in `.idf-version` (the same one espOS
+pins). No PlatformIO, no Arduino.
 
 ```bash
-pio run -e p4_cockpit                  # build
-pio run -e p4_cockpit -t upload        # build + flash via /dev/ttyACM0
-pio device monitor                     # local serial
-nc <device-ip> 2323                    # remote log stream
+git clone --recursive https://github.com/dirkwa/sensesp-p4-cockpit   # espos/ is a submodule
+. ~/esp-idf-v6.0.2/export.sh                                          # or wherever that IDF lives
+(cd espos/ui && npm ci && npm run build)   # optional: the espOS web UI → LittleFS image
+idf.py set-target esp32p4
+idf.py build                               # or scripts/build.sh (nice'd, one at a time)
+idf.py -p /dev/ttyACM0 flash monitor
 ```
 
-Target: `esp32-p4`, 16 MB flash, PSRAM enabled, LittleFS partition. See [platformio.ini](platformio.ini).
+The first build generates a *development* app-signing key
+(`secure_boot_signing_key.pem`, git-ignored). Devices flashed with a
+dev-key build only accept OTA images signed with that same key — for
+anything you ship, create and keep your own key (espos/docs/ota.md).
 
-## Which wake word you get depends on the env you build
+**Provisioning**: no credentials are compiled in. A fresh panel raises the
+`espOS-xxxx` setup portal (WiFi + SignalK) — or write an NVS image with
+`wifi.ssid0/psk0` and `sk.server_*` (espos/docs/wifi.md). The SignalK access
+request appears in the server's Security → Access Requests; approve it
+once. Updates afterwards go over espOS OTA (`http://<device>/` → OTA, or
+`POST /api/v1/ota {"url": …}`), signed and rollback-protected.
 
-The hands-free wake word is **chosen at build time**, and the two envs listen for different words. Building the wrong one is silent — the panel comes up healthy, streams audio, and simply never wakes.
+`idf.py build` produces `build/cockpit.bin` (signed) and, with the espOS UI
+built, `build/storage.bin`; `python scripts/merge_firmware.py --build-dir
+build --chip esp32p4 --out cockpit-merged.bin` makes the single image the
+release workflow attaches (flash at `0x0`).
 
-| Env | Wake runs | Word | Needs |
-|---|---|---|---|
-| `p4_cockpit` (default) | on-device (esp-sr WakeNet) | **"Hi ESP"** | the `model` partition flashed |
-| `p4_cockpit_netwake` | [signalk-openwakeword](https://github.com/dirkwa/signalk-openwakeword) over the network | whatever the server loads, e.g. **"hey moin"** | that plugin running and reachable |
+## Wake word (phase 2)
 
-**Each release ships both variants** — `p4_cockpit-merged.bin` (on-device, *"Hi ESP"*) and `p4_cockpit_netwake-merged.bin` (network wake). Flash whichever matches the table above; for a wake word other than what the server already serves, or to point the netwake build at a specific host, build it yourself:
+The hands-free wake word (on-device esp-sr WakeNet, or
+[signalk-openwakeword](https://github.com/dirkwa/signalk-openwakeword) over
+the network) returns with the audio/voice phase of the espOS port; until
+then the voice widgets report "not available" and `GET /hello` shows no
+`wake` block.
 
-```bash
-pio run -e p4_cockpit_netwake -t upload
-```
+## Flashing without a toolchain (browser-based)
 
-Its host/word are compile-time flags in [platformio.ini](platformio.ini) (`JLP_NETWORK_WAKE_HOST`, `JLP_NETWORK_WAKE_WORD`); point them at your SignalK server and the model name the plugin serves. The name must match a model the plugin actually loads — an empty or unknown detect list makes openWakeWord silently fall back to its own default model.
-
-`GET /hello` reports which mode is live under `wake`: `on_device` tells the two apart, and on the network path `chunks` climbing proves the mic is reaching the detector (both stay `0` on-device by design).
-
-The firmware depends on released [SensESP](https://github.com/SignalK/SensESP) `>= 3.5.0` (pinned in [platformio.ini](platformio.ini)). The WS meta stream (`sendMeta=all` + `SKMetadataListener`) — how widgets learn zone definitions for color tinting — and the `SKPrefixListener` the notifications registry uses are all in that release.
-
-## Flashing without installing PlatformIO (browser-based)
-
-For the very first flash — or recovery if a device won't boot — you don't need PlatformIO or the sister libs checked out on the flashing machine. [ESP Tool](https://www.espboards.dev/tools/program/) flashes over USB directly from the browser via the Web Serial API. This only replaces the one-time step of writing bootloader + partition table + app to a blank board; normal updates after that go over HTTP OTA (port 8080), not through this tool.
-
-1. **Browser**: Chrome, Edge, or Opera (Web Serial API isn't supported in Firefox or Safari).
-2. **Get the firmware**: every published [release](https://github.com/BoatHacks/sensesp-p4-cockpit/releases) has `p4_cockpit-merged.bin` (and `p4_cockpit_netwake-merged.bin`) — a single file with the bootloader, partition table, app image, and the esp-sr WakeNet model partition already combined via `esptool merge_bin` (see [`.github/workflows/release-firmware.yml`](.github/workflows/release-firmware.yml)), flashable in one shot at offset `0x0`. `otadata` is deliberately left out: an erased `otadata` reads as all-`0xFF`, which the bootloader treats as "boot the first OTA slot" — exactly what a fresh flash wants. You can also build it yourself: `pio run -e p4_cockpit && python scripts/merge_firmware.py --build-dir .pio/build/p4_cockpit --chip esp32p4 --require-model --out p4_cockpit-merged.bin`.
-3. **Connect**: plug the board's USB-UART port into your computer, open the ESP Tool page, and click **Connect** to pick the serial port. If the board doesn't auto-reset into download mode, put it there manually: hold **BOOT**, tap **RESET**, then release **BOOT**.
-4. Switch to the **Flash firmware** tab, **Add File**, pick the merged `.bin`, and set its offset to `0x0`.
-5. **Flash settings**: mode `dio`, freq `80m`, size `16MB` (see [`p4_16mb.csv`](p4_16mb.csv) / `board_upload.flash_size` in [platformio.ini](platformio.ini)).
-6. Click **Program** and wait for it to finish, then reset the board. Open a serial monitor (ESP Tool's built-in one, or `pio device monitor`) to confirm it boots and joins Wi-Fi.
+For the very first flash — or recovery if a device won't boot —
+[ESP Tool](https://www.espboards.dev/tools/program/) flashes over USB
+directly from the browser (Chrome/Edge). Every published
+[release](https://github.com/dirkwa/sensesp-p4-cockpit/releases) has
+`cockpit-merged.bin` (bootloader + partition table + app + web UI image),
+flashable in one shot at offset `0x0`, flash settings `dio` / `80m` /
+`16MB`. Hold **BOOT**, tap **RESET** if the board does not auto-enter
+download mode.
 
 ## Push your first layout
 
-Once the device prints `mDNS service registered: p4-cockpit._signalk-player._tcp` to the remote log:
+Once the device log (`http://<device>/` → Logs) shows `announced _signalk-player._tcp on port 8081`:
 
 ```bash
 IP=<device-ip>
@@ -174,8 +190,8 @@ Or open the SK admin UI, launch **HMI Designer**, point it at `http://<device-ip
 
 - [signalk-hmi-designer](https://github.com/dirkwa/signalk-hmi-designer) — the SignalK webapp that designs and pushes layouts (drag-and-drop canvas, pixel-perfect WASM preview, live mirror mode).
 - [sensesp-p4-cockpit-wasm](https://github.com/dirkwa/sensesp-p4-cockpit-wasm) — the same `widget_factory.cpp` compiled to WebAssembly so the designer can render layouts pixel-identically to the device without one being connected.
-- **sensesp-cockpit-display** — shared HAL (display, touch, idle backlight) + OTA + remote-log library for the Waveshare 7B (linked as a local symlink in `platformio.ini`).
-- **sensesp-n2k-gateway** — the N2K-over-TWAI + candump TCP gateway library (also a local symlink).
+- [espOS](https://github.com/dirkwa/espOS) — the ESP-IDF 6 runtime under 2.x (submodule `espos/`).
+- **sensesp-cockpit-display / sensesp-n2k-gateway / sensesp-ble-gateway / sensesp-wyoming-satellite** — the 1.x Arduino libraries; their contents are being folded into `components/` here during the 2.x port.
 
 ## License
 

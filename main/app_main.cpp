@@ -1,0 +1,265 @@
+/* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
+ *
+ * sensesp-p4-cockpit on espOS — application entry.
+ *
+ * espOS provides WiFi, config store + web UI, SignalK discovery/token/
+ * stream (in and out), logs, core dump and signed OTA. This file wires the
+ * panel on top: display + LVGL (cockpit_hal), the JSON Layout Player (jlp/)
+ * with its layout push API on :8081, and the status/alert overlays.
+ *
+ * Phase 1 of the port: display, layouts, SK values/meta/notifications,
+ * anchor PUTs. Audio/voice, the N2K gateway and the BLE gateway follow in
+ * later phases (their code compiles against inert stand-ins for now).
+ */
+#include <cstdio>
+#include <set>
+#include <string>
+#include <vector>
+
+#include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "esp_system.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "lvgl.h"
+
+#include "cockpit_hal/null_audio.h"
+#include "cockpit_hal/ui.h"
+#include "cockpit_hal/waveshare_7b.h"
+#include "cockpit_voice/wyoming_satellite.h"
+#include "espos_cfg_keys.h"
+#include "espos_config.h"
+#include "espos_httpd.h"
+#include "espos_httpd_sse.h"
+#include "espos_log.h"
+#include "espos_ota.h"
+#include "espos_sk.h"
+#include "espos_wifi.h"
+
+#include "jlp/alert_overlay.h"
+#include "jlp/audio/chime.h"
+#include "jlp/audio/voice_control.h"
+#include "jlp/default_layout.h"
+#include "jlp/idle_dimmer.h"
+#include "jlp/layout/layout_manager.h"
+#include "jlp/layout/store.h"
+#include "jlp/net/http_api.h"
+#include "jlp/net/layout_fetch.h"
+#include "jlp/net/mdns_announce.h"
+#include "jlp/net/sk_put.h"
+#include "jlp/net/sk_server.h"
+#include "jlp/net/zone_fetch.h"
+#include "jlp/notifications_registry.h"
+#include "jlp/status_overlay.h"
+#include "jlp/subject_registry.h"
+#include "jlp/sun_state.h"
+#include "jlp/wake_overlay.h"
+#include "jlp/zone_registry.h"
+
+static const char* TAG = "cockpit";
+
+namespace {
+
+// ---- SignalK stream state → overlay ------------------------------------
+// The overlay reads the stream state at 1 Hz (below); the boot-time
+// layout fetch and zone seed fire once, on the first connect.
+bool s_boot_fetch_done = false;
+bool s_last_connected = false;
+
+void poll_sk_state() {
+  espos_sk_ws_status_t ws;
+  bool connected = espos_sk_ws_get_status(&ws) == ESP_OK && ws.connected;
+  if (connected && !s_last_connected) {
+    jlp::overlay().set_sk("ok");
+    jlp::overlay().hide_sk_lost();
+    jlp::SkServer s = jlp::sk_server();
+    jlp::overlay().set_sk_server(s.host.c_str(), s.port);
+    if (!s_boot_fetch_done) {
+      s_boot_fetch_done = true;
+      // Seed quiet paths (SK only sends deltas on change) and pull the
+      // boot layout from applicationData, both against the server espOS
+      // selected.
+      const auto& boot_paths = jlp::layout_manager().known_paths();
+      if (!boot_paths.empty()) {
+        std::vector<std::string> v(boot_paths.begin(), boot_paths.end());
+        jlp::zone_fetch_for_paths(s.host, s.port, v);
+      }
+      jlp::layout_fetch_async_apply(s.host, s.port);
+    }
+  } else if (!connected && s_last_connected) {
+    jlp::overlay().set_sk("down");
+    jlp::overlay().show_sk_lost();
+  } else if (!connected) {
+    espos_sk_server_t srv;
+    bool have = espos_sk_get_server(&srv) == ESP_OK;
+    jlp::overlay().set_sk(!have ? "no server" : ws.enabled ? "connecting" : "off");
+  }
+  s_last_connected = connected;
+}
+
+void poll_status_line() {
+  espos_wifi_status_t w;
+  if (espos_wifi_get_status(&w) == ESP_OK && w.sm.state == ESPOS_WIFI_ST_CONNECTED) {
+    char buf[48];
+    snprintf(buf, sizeof(buf), "%s %ddBm", w.sm.link.ssid, (int)w.rssi);
+    jlp::overlay().set_wifi(buf);
+  } else {
+    jlp::overlay().set_wifi("down");
+  }
+  jlp::overlay().set_n2k(-1, 0);   // N2K gateway: phase 3
+  jlp::overlay().set_uptime_heap((uint32_t)(esp_timer_get_time() / 1000000), esp_get_free_heap_size());
+}
+
+// ---- health watchdog (every 30 s, on the UI thread) ---------------------
+void health_check() {
+  static int consecutive_fail = 0;
+  bool ok = true;
+  const char* reason = "";
+  espos_wifi_status_t w;
+  bool wifi_up = espos_wifi_get_status(&w) == ESP_OK && w.sm.state == ESPOS_WIFI_ST_CONNECTED;
+  if (!wifi_up) {
+    ok = false;
+    reason = "wifi disconnected";
+  } else if (esp_get_free_heap_size() < 64 * 1024) {
+    ok = false;
+    reason = "heap exhausted";
+  } else if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < 40 * 1024 ||
+             heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) < 12 * 1024) {
+    ok = false;
+    reason = "internal RAM exhausted";
+  }
+  if (!ok) {
+    consecutive_fail++;
+    ESP_LOGW("watchdog", "health check FAIL %d/3: %s", consecutive_fail, reason);
+    if (consecutive_fail >= 3) {
+      ESP_LOGE("watchdog", "rebooting due to: %s", reason);
+      vTaskDelay(pdMS_TO_TICKS(200));
+      esp_restart();
+    }
+  } else {
+    consecutive_fail = 0;
+  }
+}
+
+// UI-thread stall watchdog: reboot when the LVGL task stops ticking.
+void ui_wdt_task(void*) {
+  uint32_t last = 0;
+  int stalled_s = 0;
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    uint32_t now = cockpit_hal::ui::heartbeat();
+    if (now == last) {
+      if (++stalled_s >= 15) {
+        ESP_LOGE("ui_wdt", "ui thread stalled %ds (hb=%lu); rebooting", stalled_s, (unsigned long)now);
+        esp_restart();
+      }
+    } else {
+      stalled_s = 0;
+      last = now;
+    }
+  }
+}
+
+}  // namespace
+
+extern "C" void app_main(void) {
+  ESP_ERROR_CHECK(espos_log_init());
+  ESP_ERROR_CHECK(espos_config_init(nullptr, nullptr));
+
+  // ---- display + LVGL first: the panel shows something within a second
+  static cockpit_hal::Waveshare7BDisplay display;
+  static cockpit_hal::Waveshare7BTouch touch;
+  cockpit_hal::ui::start(&display, &touch);
+  {
+    int32_t pct = 95;
+    espos_config_get_i32(ESPOS_CFG_NS_COCKPIT, ESPOS_CFG_COCKPIT_BRIGHTNESS, &pct);
+    display.set_brightness((uint8_t)pct);
+  }
+
+  // Audio + voice: inert stand-ins in phase 1 (see cockpit_voice).
+  static cockpit_hal::NullAudio audio;
+  cockpit_voice::WyomingSatelliteConfig wy_cfg;
+  wy_cfg.on_device_wake = true;
+  wy_cfg.wake_input_gain = 6;
+  wy_cfg.wake_threshold = 0.45f;
+  wy_cfg.mic_stream_gain = 3;
+  wy_cfg.awake_cue = false;
+  static cockpit_voice::WyomingSatellite wyoming_sat(&audio, wy_cfg);
+  wyoming_sat.set_mic_muted_fn([] { return jlp::voice().mic_muted(); });
+  jlp::http_api_set_wyoming(&wyoming_sat);
+
+  // ---- JLP on the UI thread: overlay, layout manager, stored/default layout
+  cockpit_hal::ui::post([] {
+    char host[33] = "";
+    espos_config_get_str(ESPOS_CFG_NS_WIFI, ESPOS_CFG_WIFI_HOSTNAME, host, sizeof(host), nullptr);
+    jlp::overlay().init();
+    jlp::overlay().set_hostname(host[0] ? host : "cockpit");
+    jlp::layout_manager().init(jlp::overlay().content_root());
+    jlp::store_init();
+    jlp::chime().init(&audio);
+    jlp::voice().init(&wyoming_sat, &audio);
+    std::string stored;
+    jlp::ApplyResult r{};
+    if (jlp::store_read(&stored)) {
+      r = jlp::layout_manager().apply(stored, jlp::ApplySource::BootStore);
+      if (!r.ok) {
+        ESP_LOGW(TAG, "stored layout rejected (%s); clearing + falling back", r.err.c_str());
+        jlp::store_clear();
+      }
+    }
+    if (!r.ok) {
+      r = jlp::layout_manager().apply(jlp::kDefaultLayoutJson, jlp::ApplySource::BootDefault);
+      if (!r.ok) ESP_LOGE(TAG, "default layout rejected: %s", r.err.c_str());
+    }
+    // After a layout swap that introduces new paths, seed their values via
+    // REST (SK only streams on change); espOS subscribes them itself.
+    jlp::layout_manager().set_post_swap_hook(
+        [](bool new_paths_introduced, const std::set<std::string>& new_paths, jlp::ApplySource src,
+           const std::set<std::string>& all_paths) {
+          const bool boot = src == jlp::ApplySource::BootStore || src == jlp::ApplySource::BootFetched;
+          const std::set<std::string>& to_fetch = boot ? all_paths : new_paths;
+          if (to_fetch.empty()) return;
+          std::vector<std::string> v(to_fetch.begin(), to_fetch.end());
+          jlp::SkServer s = jlp::sk_server();
+          if (!s.host.empty()) jlp::zone_fetch_for_paths(s.host, s.port, v);
+          if (new_paths_introduced) jlp::subscribe_new_paths(new_paths);
+        });
+    jlp::zones().hook_sk_ws();
+    jlp::notifications().hook_sk_ws();
+    jlp::sun_state().hook_sk_ws();
+    jlp::alert_overlay().init();
+    jlp::wake_overlay().init();   // after alert_overlay: z-order
+    jlp::idle_dimmer().init();
+    (void)jlp::notifications().on_change([]() {
+      if (jlp::notifications().last_change_was_escalation()) jlp::idle_dimmer().wake();
+    });
+    cockpit_hal::ui::every(1000, [] { poll_sk_state(); poll_status_line(); });
+    cockpit_hal::ui::every(30000, health_check);
+    cockpit_hal::ui::every(5000, [] {
+      ESP_LOGI(TAG, "heap=%lu iram=%u iram_min=%u iram_big=%u psram=%lu",
+               (unsigned long)esp_get_free_heap_size(), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+               (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+               (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+               (unsigned long)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    });
+  });
+
+  // ---- network: espOS
+  ESP_ERROR_CHECK(espos_httpd_start());
+  ESP_ERROR_CHECK(espos_wifi_start());
+  ESP_ERROR_CHECK(espos_sk_start());
+  ESP_ERROR_CHECK(espos_ota_start());
+
+  // ---- the layout push API (designer) on its own port + mDNS
+  int32_t api_port = 8081;
+  espos_config_get_i32(ESPOS_CFG_NS_COCKPIT, ESPOS_CFG_COCKPIT_API_PORT, &api_port);
+  jlp::http_api_start((uint16_t)api_port);
+  jlp::mdns_announce_start((uint16_t)api_port);
+  wyoming_sat.start();
+
+  xTaskCreate(ui_wdt_task, "ui_wdt", 2560, nullptr, configMAX_PRIORITIES - 1, nullptr);
+  ESP_LOGI(TAG, "boot: iram=%u iram_big=%u psram=%lu", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+           (unsigned long)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+}

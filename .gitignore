@@ -24,3 +24,16 @@ cr-review-*
 # still be committed deliberately.
 *.wav
 /sensesp-p4-cockpit-merged*.bin
+
+# ---- espOS / ESP-IDF 6 project (branch espos) ----
+build/
+build-*/
+sdkconfig
+sdkconfig.old
+managed_components/
+secure_boot_signing_key.pem
+*.pem
+*.nvs.csv
+*.nvs.bin
+provisioning/
+secrets/

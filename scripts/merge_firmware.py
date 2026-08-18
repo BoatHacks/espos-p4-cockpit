@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Merge a PlatformIO/ESP-IDF build's flash images into one binary.
+"""Merge an ESP-IDF build's flash images into one binary.
 
 Reads the offset/file map ESP-IDF's build already worked out
 (flasher_args.json in the build dir) and hands it to esptool's
@@ -15,13 +15,12 @@ from pathlib import Path
 
 
 def find_packaged_srmodels(chip: str) -> Path | None:
-    """Locate the prebuilt srmodels.bin shipped with the framework.
+    """Locate a prebuilt srmodels.bin (WakeNet model partition).
 
-    `pio run` never runs esp-sr's movemodel.py, so the WakeNet model
-    partition is not among the build outputs. pioarduino ships a
-    prepacked srmodels.bin per chip variant instead; the esp32p4 and
-    esp32p4_es copies are byte-identical, so either satisfies both
-    silicon revisions.
+    With esp-sr in the ESP-IDF build, `idf.py build` writes srmodels.bin
+    into the build dir itself (phase 2 of the espOS port). This fallback
+    finds the copy an older PlatformIO/pioarduino install shipped, for
+    machines that still have one.
     """
     root = Path(
         os.environ.get("PLATFORMIO_CORE_DIR", Path.home() / ".platformio")
@@ -40,7 +39,7 @@ def find_packaged_srmodels(chip: str) -> Path | None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", required=True, type=Path,
-                         help="e.g. .pio/build/p4_cockpit")
+                         help="e.g. build")
     parser.add_argument("--chip", required=True, help="e.g. esp32p4")
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument(
@@ -64,29 +63,12 @@ def main() -> int:
     for p in sorted(all_files):
         print(" ", p.relative_to(args.build_dir))
 
-    # flasher_args.json's paths mirror idf.py's own build/bootloader/,
-    # build/partition_table/ layout and filenames, but PlatformIO's
-    # espidf build reorganizes and renames those outputs (bootloader.bin
-    # stays put, but the partition table becomes partitions.bin and the
-    # app image becomes firmware.bin at the build-dir root — see
-    # ota.sh, which already flashes .pio/build/<env>/firmware.bin).
-    # Resolve by role instead of trusting the manifest's exact path.
-    #
-    # ota_data_initial.bin and srmodels.bin (the esp-sr WakeNet model
-    # partition) aren't produced by a plain `pio run` at all — they need
-    # extra build steps this workflow doesn't run.
-    #
-    # Skipping otadata is harmless: an unwritten otadata partition reads
-    # as all-0xFF, which ESP-IDF's bootloader treats as "boot the first
-    # OTA slot".
-    #
-    # Skipping the model is NOT harmless — the default env runs on-device
-    # WakeNet (CONFIG_SR_WN_WN9_HIESP + CONFIG_MODEL_IN_FLASH), so an
-    # empty "model" partition means the wake word is silently dead on a
-    # freshly flashed board, and OTA can't repair it (it writes the app
-    # slot only). Fall back to the framework's prepacked srmodels.bin,
-    # and under --require-model treat a miss as a hard error rather than
-    # shipping a release binary with no wake word.
+    # flasher_args.json's paths mirror idf.py's build/bootloader/,
+    # build/partition_table/ layout; resolve by role as well so a renamed
+    # output still lands. Skipping otadata is harmless (all-0xFF = boot the
+    # first OTA slot). Skipping the model is NOT harmless once on-device
+    # WakeNet is back (phase 2): an empty "model" partition means a dead
+    # wake word that OTA cannot repair, hence --require-model.
     by_basename = {p.name: p for p in all_files}
     packaged_srmodels = find_packaged_srmodels(args.chip)
     if packaged_srmodels is not None and "srmodels.bin" not in by_basename:

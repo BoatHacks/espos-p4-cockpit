@@ -10,7 +10,7 @@ under their own licenses, which continue to apply to them unchanged:
 | `components/esp_lcd_ek79007` | 2023 Espressif Systems (Shanghai) CO LTD | Apache-2.0 |
 
 Their SPDX headers are retained in the source files. Libraries resolved at
-build time (SensESP, ESP-IDF, the sister libraries in `platformio.ini`) are
+build time (ESP-IDF, espOS, the registry components in `idf_component.yml`) are
 governed by their own licenses and are not part of this repository.
 
 The full text of the Apache License, Version 2.0 follows.
