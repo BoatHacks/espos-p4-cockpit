@@ -1,7 +1,7 @@
 # Third-party notices
 
 The license in [LICENSE.md](LICENSE.md) covers the code written for
-sensesp-p4-cockpit. The following components are vendored into this repository
+espos-p4-cockpit. The following components are vendored into this repository
 under their own licenses, which continue to apply to them unchanged:
 
 | Component | Copyright | License |
