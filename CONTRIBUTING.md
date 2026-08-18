@@ -6,8 +6,12 @@ Bug reports, feature requests and pull requests are welcome at
 Before opening a pull request, make sure the firmware still builds:
 
 ```bash
-idf.py build
+scripts/build.sh
 ```
+
+That wrapper is a nice'd `idf.py build` that holds a lock so two builds
+never race on `build/` — on a small machine a bare `idf.py build`
+saturates every core and the editor/SSH session stops being scheduled.
 
 Follow the conventions in [AGENTS.md](AGENTS.md): Angular-style commit and PR
 titles, and never commit local or boat configuration.

@@ -137,16 +137,18 @@ wins at runtime.
 
 ```bash
 . ~/esp-idf-v6.0.2/export.sh           # the version in .idf-version
+scripts/build-ui.sh                    # nice'd espOS web UI → espos/ui/dist-gz
 scripts/build.sh                       # nice'd idf.py build, one at a time
 idf.py -p /dev/ttyACM0 flash monitor
 curl -sf http://<device-ip>:8081/hello | jq .
 curl -sf "http://<device-ip>/api/v1/logs?limit=200" | jq -r '.lines[]'   # espOS log ring
 ```
 
-Prefer `scripts/build.sh` over a bare `idf.py build` on a small machine:
-a full build saturates every core and the editor/SSH session stops being
-scheduled. The wrapper runs at `nice -n 15`, `ionice -c3`, `-j nproc-1`
-and holds a lock so two builds never race on `build/`.
+Prefer the wrappers over bare `idf.py build` / `npm run build` on a small
+machine: a full build saturates every core and the editor/SSH session
+stops being scheduled. Both run at `nice -n 15`, `ionice -c3`;
+`build.sh` caps ninja at `-j 3` (override with `BUILD_JOBS`) and holds a
+lock so two builds never race on `build/`.
 
 Boards: the 7B (1024×600 EK79007) is the target; the 4B HAL is parked
 until a board is on hand (`components/esp_lcd_st7703` is excluded from the
@@ -208,7 +210,7 @@ designer refuses to push widget kinds the device doesn't advertise.
 
 ## Repo conventions
 
-- **Build/test gate**: `idf.py build` must succeed. There are no host
+- **Build/test gate**: `scripts/build.sh` must succeed. There are no host
   tests in this repo (espOS has them) — verify on device via the espOS
   log ring + curl probes.
 - **Commits and PR titles**: Angular Conventional Commits —

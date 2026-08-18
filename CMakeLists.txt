@@ -3,7 +3,7 @@
 # espos-p4-cockpit: a pure ESP-IDF 6 project. WiFi, config, the
 # web UI, SignalK discovery/token/stream and OTA come from the espOS
 # submodule (espos/); this project adds the display HAL, LVGL and the JSON
-# Layout Player. Build:  . espos/.idf-version's IDF; idf.py set-target esp32p4; idf.py build
+# Layout Player. Build:  . espos/.idf-version's IDF; idf.py set-target esp32p4; scripts/build.sh
 cmake_minimum_required(VERSION 3.22)
 
 file(READ "${CMAKE_CURRENT_LIST_DIR}/.idf-version" COCKPIT_IDF_VERSION)
@@ -52,5 +52,5 @@ else()
     # real config UI, which looks like a firmware bug rather than a missing
     # build step.
     message(WARNING "cockpit: espos/ui/dist-gz missing — the device will serve the placeholder page, "
-                    "not the espOS web UI. Build it with: (cd espos/ui && npm ci && npm run build)")
+                    "not the espOS web UI. Build it with: scripts/build-ui.sh")
 endif()
