@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
  *
- * sensesp-p4-cockpit on espOS — application entry.
+ * espos-p4-cockpit — application entry.
  *
  * espOS provides WiFi, config store + web UI, SignalK discovery/token/
  * stream (in and out), logs, core dump and signed OTA. This file wires the

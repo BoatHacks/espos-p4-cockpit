@@ -48,7 +48,7 @@ reviews:
         interact with existing code and documentation, not just the diff
         in isolation.
 
-        sensesp-p4-cockpit is **ESP32-P4 firmware** running the JSON
+        espos-p4-cockpit is **ESP32-P4 firmware** running the JSON
         Layout Player: a runtime-loadable LVGL widget engine driven by
         JSON pushed over HTTP, plus a SignalK <-> NMEA 2000 gateway and
         a Wyoming voice satellite. There are no host tests — the build

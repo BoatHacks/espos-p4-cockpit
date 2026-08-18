@@ -1,4 +1,4 @@
-# sensesp-p4-cockpit
+# espos-p4-cockpit
 
 ESP32-P4 firmware that runs the **JSON Layout Player (JLP)** — a
 runtime-loadable widget engine on a Waveshare ESP32-P4-WIFI6-Touch-LCD-7B

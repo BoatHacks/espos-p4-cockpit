@@ -1,4 +1,4 @@
-# sensesp-p4-cockpit
+# espos-p4-cockpit
 
 ESP32-P4 firmware for the [Waveshare ESP32-P4-WIFI6-Touch-LCD-7B](https://www.waveshare.com/wiki/ESP32-P4-WIFI6-Touch-LCD-7B) — a 1024×600 capacitive-touch helm display that doubles as an NMEA 2000 ↔ SignalK gateway.
 
@@ -134,7 +134,7 @@ Pure ESP-IDF, pinned to the version in `.idf-version` (the same one espOS
 pins). No PlatformIO, no Arduino.
 
 ```bash
-git clone --recursive https://github.com/dirkwa/sensesp-p4-cockpit   # espos/ is a submodule
+git clone --recursive https://github.com/dirkwa/espos-p4-cockpit   # espos/ is a submodule
 . ~/esp-idf-v6.0.2/export.sh                                          # or wherever that IDF lives
 (cd espos/ui && npm ci && npm run build)   # optional: the espOS web UI → LittleFS image
 idf.py set-target esp32p4
@@ -175,7 +175,7 @@ under `wake`.
 For the very first flash — or recovery if a device won't boot —
 [ESP Tool](https://www.espboards.dev/tools/program/) flashes over USB
 directly from the browser (Chrome/Edge). Every published
-[release](https://github.com/dirkwa/sensesp-p4-cockpit/releases) has
+[release](https://github.com/dirkwa/espos-p4-cockpit/releases) has
 `cockpit-merged.bin` (bootloader + partition table + app + web UI image),
 flashable in one shot at offset `0x0`, flash settings `dio` / `80m` /
 `16MB`. Hold **BOOT**, tap **RESET** if the board does not auto-enter
@@ -204,7 +204,8 @@ Or open the SK admin UI, launch **HMI Designer**, point it at `http://<device-ip
 
 ## License
 
-sensesp-p4-cockpit 1.0.0 and later is **source available, not open source**.
+espos-p4-cockpit (and sensesp-p4-cockpit 1.0.0 and later, its previous name) is
+**source available, not open source**.
 See [LICENSE.md](LICENSE.md).
 
 **You may**, free of charge: run it on your own boat or fleet, private or

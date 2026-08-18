@@ -23,7 +23,8 @@ cr-review-*
 # Scoped rather than a blanket *.bin so a vendored component's binary can
 # still be committed deliberately.
 *.wav
-/sensesp-p4-cockpit-merged*.bin
+/espos-p4-cockpit-merged*.bin
+/cockpit-merged*.bin
 
 # ---- espOS / ESP-IDF 6 project (branch espos) ----
 build/

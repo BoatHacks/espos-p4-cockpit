@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution
 #
-# sensesp-p4-cockpit on espOS: a pure ESP-IDF 6 project. WiFi, config, the
+# espos-p4-cockpit: a pure ESP-IDF 6 project. WiFi, config, the
 # web UI, SignalK discovery/token/stream and OTA come from the espOS
 # submodule (espos/); this project adds the display HAL, LVGL and the JSON
 # Layout Player. Build:  . espos/.idf-version's IDF; idf.py set-target esp32p4; idf.py build
