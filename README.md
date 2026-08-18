@@ -136,11 +136,20 @@ pins). No PlatformIO, no Arduino.
 ```bash
 git clone --recursive https://github.com/dirkwa/espos-p4-cockpit   # espos/ is a submodule
 . ~/esp-idf-v6.0.2/export.sh                                          # or wherever that IDF lives
-(cd espos/ui && npm ci && npm run build)   # optional: the espOS web UI → LittleFS image
+scripts/build-ui.sh                        # optional: the espOS web UI → LittleFS image
 idf.py set-target esp32p4
-idf.py build                               # or scripts/build.sh (nice'd, one at a time)
+scripts/build.sh
 idf.py -p /dev/ttyACM0 flash monitor
 ```
+
+Both wrappers run the build under `nice`/`ionice` and hold a lock so two
+of them never race on the same output. `build-ui.sh` runs `npm run build`
+in `espos/ui` (re-running `npm ci` when the lockfile changed);
+`build.sh` runs `idf.py reconfigure` and then `ninja -j 3` — IDF 6's
+`idf.py` has no `-j`, so capping parallelism means driving ninja
+directly (override with `BUILD_JOBS`). On a 4-core Pi a bare build takes
+the machine away from your editor; on a big workstation `idf.py build`
+is fine.
 
 The first build generates a *development* app-signing key
 (`secure_boot_signing_key.pem`, git-ignored). Devices flashed with a
@@ -154,7 +163,7 @@ request appears in the server's Security → Access Requests; approve it
 once. Updates afterwards go over espOS OTA (`http://<device>/` → OTA, or
 `POST /api/v1/ota {"url": …}`), signed and rollback-protected.
 
-`idf.py build` produces `build/cockpit.bin` (signed) and, with the espOS UI
+The build produces `build/cockpit.bin` (signed) and, with the espOS UI
 built, `build/storage.bin`; `python scripts/merge_firmware.py --build-dir
 build --chip esp32p4 --out cockpit-merged.bin` makes the single image the
 release workflow attaches (flash at `0x0`).
