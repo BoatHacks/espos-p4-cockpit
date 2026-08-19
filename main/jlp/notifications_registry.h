@@ -5,6 +5,7 @@
 #include <functional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <ArduinoJson.h>
@@ -160,6 +161,17 @@ class NotificationsRegistry {
     Observer cb;
   };
   std::unordered_map<std::string, Notification> map_;
+  // Paths whose most recent clear was caused by our own ACK delta.
+  //
+  // Acking sends state=normal to the same path the alarm source drives,
+  // so the server echoes a clear straight back at us. Treating that as a
+  // genuine "condition went away" would erase the ack we just made, and
+  // the source's next alarm — often under a second later — would pop the
+  // overlay again. The alarm is not re-firing because it escalated; it
+  // never stopped. So a clear on a path we just acked leaves the ack in
+  // place, and only a clear we did NOT cause re-arms it.
+  std::unordered_set<std::string> self_cleared_;
+
   // Locally-acknowledged paths -> the severity they were acked at.
   // Used to suppress the overlay while the bus keeps re-asserting,
   // and to re-arm if the condition later escalates.

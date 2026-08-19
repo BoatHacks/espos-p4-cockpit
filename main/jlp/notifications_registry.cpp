@@ -24,8 +24,11 @@ void NotificationsRegistry::apply(const std::string& path_after_prefix,
   // Treat a null value (path cleared) as removal.
   if (value.isNull()) {
     // A cleared path re-arms any local ack: if it fires again it
-    // should pop the overlay anew.
-    acked_.erase(path_after_prefix);
+    // should pop the overlay anew — unless this clear is the echo of
+    // our own ACK, which would erase the ack the moment we made it.
+    if (self_cleared_.erase(path_after_prefix) == 0) {
+      acked_.erase(path_after_prefix);
+    }
     if (map_.erase(path_after_prefix) > 0) {
       ESP_LOGI(TAG, "cleared %s", path_after_prefix.c_str());
       fire_observers();
@@ -50,7 +53,10 @@ void NotificationsRegistry::apply(const std::string& path_after_prefix,
   // most_severe() and the default snapshot() skip these by their
   // own filters (severity threshold + the include_cleared param).
   if (n.state == NotState::Nominal || n.state == NotState::Normal) {
-    acked_.erase(path_after_prefix);  // cleared -> re-arm
+    // cleared -> re-arm, unless we caused this clear ourselves.
+    if (self_cleared_.erase(path_after_prefix) == 0) {
+      acked_.erase(path_after_prefix);
+    }
     auto it = map_.find(path_after_prefix);
     if (it != map_.end() && it->second.state == n.state &&
         it->second.message == n.message) {
@@ -62,6 +68,13 @@ void NotificationsRegistry::apply(const std::string& path_after_prefix,
     fire_observers();
     return;
   }
+
+  // The path is alerting again, so the clear our ACK caused is behind
+  // us: drop the guard. Without this the entry would outlive the echo
+  // it was meant to absorb and swallow the NEXT clear too — the one
+  // that means the condition really went away — leaving the ack stuck
+  // on forever.
+  self_cleared_.erase(path_after_prefix);
 
   // If a previously-acked notification escalates above the level it
   // was acknowledged at, re-arm it so the overlay pops again.
@@ -141,6 +154,9 @@ void NotificationsRegistry::acknowledge(const std::string& path_after_prefix) {
     return;
   }
   acked_[path_after_prefix] = it->second.state;
+  // The ACK delta we are about to send comes back as a clear; don't let
+  // it re-arm the ack we just made (see self_cleared_).
+  self_cleared_.insert(path_after_prefix);
   ESP_LOGI(TAG, "acked %s (state=%s)", path_after_prefix.c_str(),
            not_state_name(it->second.state));
   fire_observers();
