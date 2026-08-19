@@ -161,6 +161,17 @@ Published releases are signed with a separate release key held as the
 does **not** accept release OTAs until it has been USB-flashed once with a
 release image. After that first flash, release OTAs work normally.
 
+To build such an image locally, drop the release key in as
+`secure_boot_signing_key.pem` and rebuild. ESP-IDF's signing step depends
+only on the unsigned binary, so swapping the key would otherwise leave the
+*previous* signature in place with nothing in the build log to say so; the
+root `CMakeLists.txt` fingerprints the key and forces a re-link when it
+changes. Confirm before flashing anything you cannot recover over the air:
+
+```sh
+espsecure verify-signature --version 2 --keyfile <key>.pem build/cockpit.bin
+```
+
 **Provisioning**: no credentials are compiled in. A fresh panel raises the
 `espOS-xxxx` setup portal (WiFi + SignalK) — or write an NVS image with
 `wifi.ssid0/psk0` and `sk.server_*` (espos/docs/wifi.md). The SignalK access
