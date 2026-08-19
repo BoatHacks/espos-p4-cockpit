@@ -90,6 +90,38 @@ Returns the current framebuffer.
 
 `/hello.screenshot.formats` advertises which encodings the device supports.
 
+### `POST /screen`
+
+Selects the active screen — the remote equivalent of tapping a tab.
+Lets SignalK-side automation put the helm on the right page (e.g. a rule
+that switches to the anchor screen when `navigation.state` becomes
+`anchored`).
+
+```json
+{ "id": "anchor" }
+```
+
+Addressed by `screens[].id`, not by index: the index is not stable across
+layout edits or reordering, while `id` is already required and unique.
+
+- **200** `{"ok":true,"active":"anchor"}` — switched (or already there).
+- **400** — body missing, larger than 256 bytes, not JSON, or no `id`.
+- **404** `{"ok":false,"err":…,"screens":[…]}` — no screen with that id, or
+  the active layout is single-screen and therefore has no tab strip. The
+  `screens` array lists what *is* selectable, so a caller can recover
+  without a separate `/hello`.
+
+The switch is immediate and unconditional: a remote select overrides
+whatever the crew last tapped, and the next tap overrides it back. There
+is no lock-out window.
+
+`GET /hello` reports `active_screen` (the current id, empty for a
+single-screen layout) and `screens` (all ids in tab order), so a caller
+can read the helm's state before changing it and restore it afterwards.
+
+> This endpoint is unauthenticated, like the rest of the JLP API. Anything
+> on the boat network can drive the display. See espOS issue #2.
+
 ### `GET /healthz`
 
 Liveness probe. Returns 200 `{"ok":true}` if the device is up. No body fields are stable beyond `ok`.

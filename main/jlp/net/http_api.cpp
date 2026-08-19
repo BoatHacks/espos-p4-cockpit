@@ -595,6 +595,93 @@ constexpr const char* kWidgetCatalogJson =
       "\"volume\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bg_color\",\"fg_color\"]}"
     "}";
 
+static esp_err_t screen_post(httpd_req_t* req) {
+  httpd_resp_set_type(req, "application/json");
+
+  if (req->content_len <= 0 || req->content_len > 256) {
+    httpd_resp_set_status(req, "400 Bad Request");
+    httpd_resp_sendstr(req, "{\"ok\":false,\"err\":\"body must be 1..256 bytes\"}");
+    return ESP_OK;
+  }
+
+  std::string body(req->content_len, '\0');
+  int total = 0;
+  while (total < req->content_len) {
+    int n = httpd_req_recv(req, &body[total], req->content_len - total);
+    if (n <= 0) {
+      if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+      httpd_resp_set_status(req, "500 Internal Server Error");
+      httpd_resp_sendstr(req, "{\"ok\":false,\"err\":\"recv failed\"}");
+      return ESP_FAIL;
+    }
+    total += n;
+  }
+
+  JsonDocument doc;
+  if (deserializeJson(doc, body) != DeserializationError::Ok) {
+    httpd_resp_set_status(req, "400 Bad Request");
+    httpd_resp_sendstr(req, "{\"ok\":false,\"err\":\"invalid json\"}");
+    return ESP_OK;
+  }
+  const char* id = doc["id"];
+  if (!id || !*id) {
+    httpd_resp_set_status(req, "400 Bad Request");
+    httpd_resp_sendstr(req, "{\"ok\":false,\"err\":\"missing id\"}");
+    return ESP_OK;
+  }
+
+  // select_screen touches LVGL, so it runs on the UI task. Report the
+  // resulting active screen from the same hop: reading it afterwards
+  // from here could observe a tap that landed in between.
+  std::string want(id);
+  auto found = std::make_shared<bool>(false);
+  auto active = std::make_shared<std::string>();
+  auto known = std::make_shared<std::vector<std::string>>();
+  SemaphoreHandle_t done = xSemaphoreCreateBinary();
+  if (!done) {
+    httpd_resp_set_status(req, "500 Internal Server Error");
+    httpd_resp_sendstr(req, "{\"ok\":false,\"err\":\"semaphore\"}");
+    return ESP_FAIL;
+  }
+  cockpit_hal::ui::post([want, found, active, known, done]() {
+    *found = layout_manager().select_screen(want);
+    *active = layout_manager().active_screen();
+    *known = layout_manager().screen_ids();
+    xSemaphoreGive(done);
+  });
+  if (xSemaphoreTake(done, pdMS_TO_TICKS(5000)) != pdTRUE) {
+    vSemaphoreDelete(done);
+    httpd_resp_set_status(req, "504 Gateway Timeout");
+    httpd_resp_sendstr(req, "{\"ok\":false,\"err\":\"select timed out\"}");
+    return ESP_OK;
+  }
+  vSemaphoreDelete(done);
+
+  if (!*found) {
+    JsonDocument out;
+    out["ok"] = false;
+    // A single-screen layout has no tab strip, so nothing is selectable;
+    // say that rather than reporting an unknown id.
+    out["err"] = known->empty() ? "layout is single-screen"
+                                : "no screen with that id";
+    JsonArray arr = out["screens"].to<JsonArray>();
+    for (const auto& s : *known) arr.add(s);
+    std::string s;
+    serializeJson(out, s);
+    httpd_resp_set_status(req, "404 Not Found");
+    httpd_resp_sendstr(req, s.c_str());
+    return ESP_OK;
+  }
+
+  JsonDocument out;
+  out["ok"] = true;
+  out["active"] = *active;
+  std::string s;
+  serializeJson(out, s);
+  httpd_resp_sendstr(req, s.c_str());
+  return ESP_OK;
+}
+
 esp_err_t hello_get(httpd_req_t* req) {
   httpd_resp_set_type(req, "application/json");
   const std::string& name = layout_manager().active_name();
@@ -633,6 +720,29 @@ esp_err_t hello_get(httpd_req_t* req) {
     resp["firmware"] = fw;
   }
   resp["store"] = jlp::store_boot_report();  // persistence backend status
+
+  // Which screen the helm is on, and what else it could be switched to.
+  // Read on the UI task: the switcher's vectors are owned there and a
+  // tab tap or a layout swap can reallocate them under us. Best-effort —
+  // /hello must answer even if the UI task is briefly backed up.
+  {
+    auto active = std::make_shared<std::string>();
+    auto ids = std::make_shared<std::vector<std::string>>();
+    SemaphoreHandle_t done = xSemaphoreCreateBinary();
+    if (done) {
+      cockpit_hal::ui::post([active, ids, done]() {
+        *active = layout_manager().active_screen();
+        *ids = layout_manager().screen_ids();
+        xSemaphoreGive(done);
+      });
+      if (xSemaphoreTake(done, pdMS_TO_TICKS(2000)) == pdTRUE) {
+        resp["active_screen"] = *active;
+        JsonArray arr = resp["screens"].to<JsonArray>();
+        for (const auto& s : *ids) arr.add(s);
+      }
+      vSemaphoreDelete(done);
+    }
+  }
   // Persisted panel-local audio state, so it is checkable without a serial
   // console. NOT "audio" — that key already carries the codec-ready string
   // below, and reusing it silently replaced this object with that string.
@@ -698,7 +808,9 @@ void http_api_start(uint16_t port) {
   config.recv_wait_timeout = 120;
   config.send_wait_timeout = 30;
   config.lru_purge_enable = true;
-  config.max_uri_handlers = 8;
+  // Keep ahead of the registrations below (9 today) — httpd aborts with
+  // ESP_ERR_HTTPD_HANDLERS_FULL at boot the moment this is exceeded.
+  config.max_uri_handlers = 12;
 
   httpd_handle_t server = nullptr;
   if (httpd_start(&server, &config) != ESP_OK) {
@@ -713,6 +825,14 @@ void http_api_start(uint16_t port) {
       .user_ctx = nullptr,
   };
   httpd_register_uri_handler(server, &layout_uri);
+
+  httpd_uri_t screen_uri = {
+      .uri = "/screen",
+      .method = HTTP_POST,
+      .handler = screen_post,
+      .user_ctx = nullptr,
+  };
+  httpd_register_uri_handler(server, &screen_uri);
 
   httpd_uri_t hz_uri = {
       .uri = "/healthz",
