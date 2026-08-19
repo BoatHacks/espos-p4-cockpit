@@ -38,6 +38,36 @@ if(NOT EXISTS "${COCKPIT_SIGNING_KEY}")
     endif()
 endif()
 
+# Re-sign when the KEY changes, not just when the code does.
+#
+# ESP-IDF's signing step depends on the unsigned binary alone
+# (esptool_py/project_include.cmake: DEPENDS "${build_dir}/.bin_timestamp"),
+# so swapping secure_boot_signing_key.pem and rebuilding silently keeps the
+# signature made with the PREVIOUS key — the sources did not change, so
+# nothing re-links. The build log looks completely normal. You get a device
+# that installs fine over USB and then rejects every OTA, and the reason is
+# invisible unless you run `espsecure verify-signature` by hand.
+#
+# Fingerprint the key (public part only — never the private key, this string
+# reaches the build dir) and force a re-link whenever it differs.
+file(SHA256 "${COCKPIT_SIGNING_KEY}" COCKPIT_SIGNING_KEY_HASH)
+set(COCKPIT_KEY_STAMP "${CMAKE_BINARY_DIR}/cockpit_signing_key.stamp")
+set(COCKPIT_KEY_STAMP_OLD "")
+if(EXISTS "${COCKPIT_KEY_STAMP}")
+    file(READ "${COCKPIT_KEY_STAMP}" COCKPIT_KEY_STAMP_OLD)
+endif()
+if(NOT COCKPIT_KEY_STAMP_OLD STREQUAL COCKPIT_SIGNING_KEY_HASH)
+    if(NOT COCKPIT_KEY_STAMP_OLD STREQUAL "")
+        message(STATUS "cockpit: signing key changed — forcing a re-link so the "
+                       "image is signed with the current key.")
+        # Removing the unsigned binary's stamp is what actually re-triggers
+        # IDF's sign-data step; deleting only the .bin leaves it satisfied.
+        file(REMOVE "${CMAKE_BINARY_DIR}/.bin_timestamp"
+                    "${CMAKE_BINARY_DIR}/.signed_bin_timestamp")
+    endif()
+    file(WRITE "${COCKPIT_KEY_STAMP}" "${COCKPIT_SIGNING_KEY_HASH}")
+endif()
+
 # LVGL configuration lives in the project, not in Kconfig.
 idf_build_set_property(COMPILE_DEFINITIONS "-DLV_CONF_PATH=\"${CMAKE_CURRENT_LIST_DIR}/components/cockpit_hal/lv_conf.h\"" APPEND)
 
