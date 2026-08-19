@@ -56,6 +56,7 @@ If a pushed or fetched layout fails parse/validate/build, the previous layout st
 | 8081 | GET    | `/hello`        | Capability descriptor (schema, widgets, display, active layout, screenshot formats) |
 | 8081 | POST   | `/layout`       | Apply a layout JSON (≤64 KB), atomic swap + NVS persist |
 | 8081 | GET    | `/screenshot`   | Framebuffer dump. Default: software-encoded JPEG. `?fmt=bmp` for the legacy RGB565 BMP. |
+| 8081 | POST   | `/screen`       | Select the active screen by `screens[].id` (remote tab tap) |
 | 8081 | GET    | `/healthz`      | Liveness probe                                |
 | 80   | *      | `/`, `/api/v1/…` | espOS web UI + REST API (config, WiFi, SignalK, OTA, logs, core dump) |
 | 2599 | TCP    | (candump)       | Stream raw N2K frames in candump format       |

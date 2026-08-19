@@ -34,6 +34,9 @@ constexpr uint32_t kTabActiveFgHex = 0x0d1117;
 struct ScreenSwitcherCtx {
   std::vector<lv_obj_t*> screens;
   std::vector<lv_obj_t*> tabs;
+  // Screen ids, parallel to `screens`. Index is not a stable handle
+  // across layout edits, so remote selection addresses screens by id.
+  std::vector<std::string> ids;
   int active = 0;
 };
 
@@ -121,6 +124,7 @@ bool build_screens(lv_obj_t* root, JsonObjectConst doc, JsonArrayConst screens,
     lv_obj_set_style_pad_all(page, 0, LV_PART_MAIN);
     lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
     sctx->screens.push_back(page);
+    sctx->ids.push_back(s["id"] | "");
 
     JsonArrayConst widgets = s["widgets"];
     BuildCtx ctx{page, reg, *live_paths};
@@ -169,6 +173,16 @@ bool build_screens(lv_obj_t* root, JsonObjectConst doc, JsonArrayConst screens,
 
   switcher_show(sctx, 0);
   return true;
+}
+
+// Screen selection by id, for the tab strip's remote equivalent.
+// Both must run on the UI task: they touch LVGL and read the ctx that
+// the layout root owns. A single-screen layout has no switcher at all
+// (build_screens() never allocates one), so user_data is NULL there —
+// hence the guard rather than a bare cast.
+static ScreenSwitcherCtx* switcher_of(lv_obj_t* root) {
+  if (!root) return nullptr;
+  return static_cast<ScreenSwitcherCtx*>(lv_obj_get_user_data(root));
 }
 
 // Subject kind a given widget type expects on its `bind` path. Must
@@ -415,6 +429,31 @@ ApplyResult LayoutManager::apply(const std::string& json, ApplySource src) {
            r.name.c_str(), (int)src, r.screens, r.widgets,
            (unsigned)live_paths.size(), new_paths ? 1 : 0);
   return r;
+}
+
+bool LayoutManager::select_screen(const std::string& id) {
+  ScreenSwitcherCtx* ctx = switcher_of(current_root_);
+  if (!ctx) return false;
+  for (size_t i = 0; i < ctx->ids.size(); i++) {
+    if (ctx->ids[i] == id) {
+      switcher_show(ctx, (int)i);
+      return true;
+    }
+  }
+  return false;
+}
+
+std::string LayoutManager::active_screen() const {
+  ScreenSwitcherCtx* ctx = switcher_of(current_root_);
+  if (!ctx) return "";
+  if (ctx->active < 0 || ctx->active >= (int)ctx->ids.size()) return "";
+  return ctx->ids[ctx->active];
+}
+
+std::vector<std::string> LayoutManager::screen_ids() const {
+  ScreenSwitcherCtx* ctx = switcher_of(current_root_);
+  if (!ctx) return {};
+  return ctx->ids;
 }
 
 LayoutManager& layout_manager() {

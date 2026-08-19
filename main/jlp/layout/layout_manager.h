@@ -4,6 +4,7 @@
 #include <functional>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace jlp {
 
@@ -53,6 +54,24 @@ class LayoutManager {
 
   const std::string& active_name() const { return active_name_; }
   ApplySource active_source() const { return active_source_; }
+
+  // Remote equivalent of tapping a tab. Addressed by the layout's
+  // `screens[].id` because the index is not stable across layout edits.
+  // False if the id is unknown, or if the active layout is single-screen
+  // (no tab strip exists, so there is nothing to select).
+  //
+  // UI TASK ONLY — all three touch LVGL. Callers on the HTTP task must
+  // marshal with cockpit_hal::ui::post().
+  bool select_screen(const std::string& id);
+
+  // Id of the screen currently shown; empty for a single-screen layout.
+  // Lets a caller see what the helm is on before changing it, and put it
+  // back afterwards.
+  std::string active_screen() const;
+
+  // Screen ids of the active layout, in tab order. Empty when
+  // single-screen.
+  std::vector<std::string> screen_ids() const;
 
   // Paths bound by the currently-applied layout. Used by boot to seed
   // the values of a layout that was applied (from the store) before the
