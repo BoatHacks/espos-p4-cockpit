@@ -126,4 +126,18 @@ CONFIG_LCD_DSI_ISR_CACHE_SAFE=y
 # Match the C6 slave's own default block-ack window instead of forcing 16.
 # With hosted WiFi the radio is remote, so the knob that reaches it is
 # WIFI_RMT_* (esp_wifi_remote), not the local ESP_WIFI_* one.
+# Internal RAM is the scarce resource on this board: total heap reads ~30 MB
+# but that is almost all PSRAM, and the health watchdog reboots below an 8 KB
+# largest-free internal block. In practice iram_big settled around 10 KB —
+# roughly 2 KB of headroom, so any request needing a contiguous internal block
+# could tip it.
+#
+# IDF's default sends every malloc() under 16 KB to internal RAM first. Lower
+# it so ordinary allocations prefer PSRAM; anything that genuinely needs
+# internal memory asks for it with MALLOC_CAP_INTERNAL and is unaffected, and
+# the allocator still falls back to internal when PSRAM is full (see
+# Kconfig.spiram.common: "If allocation from the preferred region fails, an
+# attempt is made to allocate from the non-preferred region instead").
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+
 CONFIG_WIFI_RMT_RX_BA_WIN=6
