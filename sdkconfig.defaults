@@ -140,21 +140,4 @@ CONFIG_LCD_DSI_ISR_CACHE_SAFE=y
 # attempt is made to allocate from the non-preferred region instead").
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
 
-# esp_hosted's SDIO RX buffers are 64-byte-aligned MALLOC_CAP_INTERNAL |
-# MALLOC_CAP_DMA allocations that grow with the largest frame seen. That pool
-# is much tighter than plain internal RAM, and nothing was measuring it: the
-# panel logged a healthy iram_big=26624 while a 9216-byte DMA-capable request
-# failed —
-#
-#   W H_SDIO_DRV: RX buffer alloc failed (len=9216); dropping read
-#
-# — after which the co-processor heartbeat stopped and the watchdog restarted
-# the panel roughly a minute later, on a ~6-20 minute cycle.
-#
-# The P4's GDMA reaches PSRAM through cache (SOC_PSRAM_DMA_CAPABLE=1), which is
-# exactly the case this option exists for; hosted_malloc_align() then tries
-# DMA-capable SPIRAM first and still falls back to internal on failure, so the
-# behaviour degrades rather than breaks.
-CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y
-
 CONFIG_WIFI_RMT_RX_BA_WIN=6
