@@ -321,12 +321,17 @@ extern "C" void app_main(void) {
     cockpit_hal::ui::every(1000, [] { poll_sk_state(); poll_status_line(); });
     cockpit_hal::ui::every(30000, health_check);
     cockpit_hal::ui::every(5000, [] {
-      ESP_LOGI(TAG, "n2k: rx_idle=%llds cl=%u | heap=%lu iram=%u iram_min=%u iram_big=%u psram=%lu",
+      // dma_big is the pool esp_hosted's SDIO buffers actually come from:
+      // 64-byte-aligned MALLOC_CAP_INTERNAL|MALLOC_CAP_DMA. It is stricter
+      // than iram_big, so a "RX buffer alloc failed" can happen with iram_big
+      // looking healthy — which is exactly how the C6 link died unseen.
+      ESP_LOGI(TAG, "n2k: rx_idle=%llds cl=%u | heap=%lu iram=%u iram_min=%u iram_big=%u dma_big=%u psram=%lu",
                (long long)((s_n2k_rx && s_n2k_rx->ever_received()) ? s_n2k_rx->seconds_since_last_rx() : -1),
                s_n2k_server ? (unsigned)s_n2k_server->connected_clients() : 0u,
                (unsigned long)esp_get_free_heap_size(), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+               (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT),
                (unsigned long)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     });
   });
