@@ -21,7 +21,7 @@ void mdns_announce_start(uint16_t api_port) {
           // discovery before falling back to a real /hello fetch.
           {"schema",   "1"},
           {"widgets",  "label,value,toggle,arc,bar,bargroup,button,notifications,"
-                       "anchor,anchor_track,voice,mute_speaker,mute_mic,volume"},
+                       "anchor,anchor_track,voice,speaker,mic,volume"},
           {"firmware", "p4-cockpit-jlp-2.0.0"},
           {"api",      "/layout,/hello,/healthz,/screenshot"},
       };

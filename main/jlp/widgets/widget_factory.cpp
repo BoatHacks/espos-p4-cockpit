@@ -506,7 +506,10 @@ lv_obj_t* make_local_toggle(BuildCtx& ctx, JsonObjectConst spec,
 lv_obj_t* build_speaker(BuildCtx& ctx, JsonObjectConst spec,
                         std::string* err) {
   // One per layout: each switch snapshots voice().speaker_muted() at build
-  // time, so a second would drift out of sync (like @audio_mute).
+  // time, so a second would drift out of sync (like @audio_mute). The
+  // sentinel keeps its old name deliberately -- it never appears on the wire,
+  // and sharing it with the mute_speaker alias is what stops a layout using
+  // both spellings from getting two switches.
   if (!ctx.live_paths.insert("@mute_speaker").second) {
     *err = "speaker: only one per layout";
     return nullptr;
@@ -529,8 +532,7 @@ lv_obj_t* build_speaker(BuildCtx& ctx, JsonObjectConst spec,
 // older `mute_mic` kind as an alias.
 lv_obj_t* build_mic(BuildCtx& ctx, JsonObjectConst spec,
                     std::string* err) {
-  // One per layout: the switch snapshots voice().mic_muted() at build time,
-  // so a second would drift out of sync (like @audio_mute).
+  // One per layout; shared with the mute_mic alias. See build_speaker.
   if (!ctx.live_paths.insert("@mute_mic").second) {
     *err = "mic: only one per layout";
     return nullptr;
