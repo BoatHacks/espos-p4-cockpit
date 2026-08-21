@@ -162,6 +162,32 @@ Published releases are signed with a separate release key held as the
 does **not** accept release OTAs until it has been USB-flashed once with a
 release image. After that first flash, release OTAs work normally.
 
+### Forking
+
+Ordinary builds need nothing: CMake generates a development key when
+`secure_boot_signing_key.pem` is absent, so pushes and pull requests on a
+fork build unchanged. Only **publishing a release** needs a decision,
+because that is the artefact other people install:
+
+- **Running an OTA fleet** — generate a key and add it as a secret. Keep
+  the file: losing it means no already-flashed device can ever take
+  another OTA.
+
+  ```sh
+  espsecure generate-signing-key --version 2 --scheme rsa3072 signing_key.pem
+  gh secret set COCKPIT_SIGNING_KEY_PEM < signing_key.pem
+  ```
+
+- **USB flashing only** — set the repository *variable*
+  `COCKPIT_ALLOW_UNSIGNED_RELEASE=true`. The release builds with a
+  throwaway key and is labelled in its notes as USB-only; devices flashed
+  from it will reject every OTA, including later releases from the same
+  fork.
+
+There is deliberately no committed default key. A private key in a public
+repository is a key everyone has, and any device trusting it would accept
+firmware signed by anyone.
+
 To build such an image locally, drop the release key in as
 `secure_boot_signing_key.pem` and rebuild. ESP-IDF's signing step depends
 only on the unsigned binary, so swapping the key would otherwise leave the
