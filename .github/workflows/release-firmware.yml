@@ -174,7 +174,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
         run: |
-          existing=$(gh release view "$TAG" --json body --jq .body 2>/dev/null || echo "")
+          # Fail closed: on a transient API error an empty `existing` would
+          # replace the release notes with nothing but the warning. Losing the
+          # changelog is worse than failing the step, which can be re-run.
+          if ! existing=$(gh release view "$TAG" --json body --jq .body 2>&1); then
+            echo "::error::could not read the existing release body for $TAG:" \
+                 "$existing"
+            exit 1
+          fi
           # Random delimiter: a release body is arbitrary user text, and a
           # fixed one appearing inside it would end the heredoc early and let
           # the rest be parsed as workflow commands.
@@ -188,7 +195,7 @@ jobs:
             echo '> this repository. Flash over USB, or set'
             echo '> `COCKPIT_SIGNING_KEY_PEM` and re-release. See espos/docs/ota.md.'
             echo ''
-            echo "$existing"
+            printf '%s\n' "$existing"
             echo "${delim}"
           } >> "$GITHUB_OUTPUT"
 
