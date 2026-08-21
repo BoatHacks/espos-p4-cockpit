@@ -590,8 +590,8 @@ constexpr const char* kWidgetCatalogJson =
       "\"anchor\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"display\",\"fg_color\"]},"
       "\"anchor_track\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"display\",\"fg_color\"]},"
       "\"voice\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bg_color\",\"fg_color\"]},"
-      "\"mute_speaker\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bg_color\",\"fg_color\"]},"
-      "\"mute_mic\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bg_color\",\"fg_color\"]},"
+      "\"speaker\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bg_color\",\"fg_color\"]},"
+      "\"mic\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bg_color\",\"fg_color\"]},"
       "\"volume\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bg_color\",\"fg_color\"]}"
     "}";
 

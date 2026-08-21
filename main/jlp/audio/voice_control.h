@@ -40,6 +40,11 @@ class VoiceControl {
 
   // Mute/unmute the panel speaker output (holds the amp disabled). Panel-
   // local; does not touch SignalK.
+  //
+  // Stored as "is muted" while the `speaker` widget reads ON = working. The
+  // negation is deliberate: unmuted is the power-on default, so a false-means-
+  // working field needs no migration and no NVS default to get right. It is
+  // also what /hello publishes as audio_state.speaker_muted.
   void set_speaker_muted(bool muted);
   bool speaker_muted() const { return speaker_muted_.load(); }
 
@@ -54,8 +59,10 @@ class VoiceControl {
 
   // --- Microphone ---
 
-  // Mute/unmute the mic: while muted, push-to-talk (and future always-on
-  // listening) is suppressed — the privacy switch. Panel-local.
+  // Mute/unmute the mic: while muted, push-to-talk and wake-word streaming
+  // are suppressed — the privacy switch. Panel-local.
+  //
+  // "is muted" here, ON = live in the `mic` widget; see set_speaker_muted.
   void set_mic_muted(bool muted);
   // Atomic: written on the event_loop (widget callback) but read from the
   // httpd task (the /mic_probe privacy gate + the satellite mute predicate).

@@ -500,18 +500,15 @@ lv_obj_t* make_local_toggle(BuildCtx& ctx, JsonObjectConst spec,
 }
 }  // namespace
 
-// `mute_speaker` — panel-local speaker switch. ON = speaker WORKS, OFF =
-// muted: the tile is captioned "SPEAKER", and a switch labelled SPEAKER
-// sitting off while audio plays reads as broken. The widget kind keeps its
-// mute_ name (the wire format is additive; renaming would break layouts) —
-// only the polarity the user sees is inverted, against
-// voice().set_speaker_muted, which still stores "is muted".
-lv_obj_t* build_mute_speaker(BuildCtx& ctx, JsonObjectConst spec,
-                             std::string* err) {
+// `speaker` — panel-local speaker switch. ON = speaker works, OFF = silent.
+// Accepts the older `mute_speaker` kind as an alias; the tile behaved this way
+// under that name too, which is exactly why it was renamed.
+lv_obj_t* build_speaker(BuildCtx& ctx, JsonObjectConst spec,
+                        std::string* err) {
   // One per layout: each switch snapshots voice().speaker_muted() at build
   // time, so a second would drift out of sync (like @audio_mute).
   if (!ctx.live_paths.insert("@mute_speaker").second) {
-    *err = "mute_speaker: only one per layout";
+    *err = "speaker: only one per layout";
     return nullptr;
   }
   lv_obj_t* root =
@@ -527,16 +524,15 @@ lv_obj_t* build_mute_speaker(BuildCtx& ctx, JsonObjectConst spec,
   return root;
 }
 
-// `mute_mic` — panel-local mic switch / privacy control. ON = mic LIVE,
-// OFF = muted, matching the "MIC" caption. Muted suppresses push-to-talk and
-// wake-word streaming via voice().set_mic_muted, which still stores "is
-// muted"; only the on-screen polarity is inverted.
-lv_obj_t* build_mute_mic(BuildCtx& ctx, JsonObjectConst spec,
-                         std::string* err) {
+// `mic` — panel-local mic switch / privacy control. ON = mic live, OFF = the
+// mic never streams (push-to-talk and wake-word both suppressed). Accepts the
+// older `mute_mic` kind as an alias.
+lv_obj_t* build_mic(BuildCtx& ctx, JsonObjectConst spec,
+                    std::string* err) {
   // One per layout: the switch snapshots voice().mic_muted() at build time,
   // so a second would drift out of sync (like @audio_mute).
   if (!ctx.live_paths.insert("@mute_mic").second) {
-    *err = "mute_mic: only one per layout";
+    *err = "mic: only one per layout";
     return nullptr;
   }
   lv_obj_t* root = make_local_toggle(ctx, spec, "MIC", !voice().mic_muted());
@@ -2496,8 +2492,12 @@ lv_obj_t* build_widget(BuildCtx& ctx, JsonObjectConst spec,
   if (t == "anchor")   return build_anchor(ctx, spec, err);
   if (t == "anchor_track") return build_anchor_track(ctx, spec, err);
   if (t == "voice")    return build_voice(ctx, spec, err);
-  if (t == "mute_speaker") return build_mute_speaker(ctx, spec, err);
-  if (t == "mute_mic")     return build_mute_mic(ctx, spec, err);
+  // mute_speaker/mute_mic are the original names, kept as aliases: the
+  // switches always read ON = working, so the mute_ prefix said the opposite
+  // of what the tile does. Layouts saved with the old kinds keep rendering.
+  if (t == "speaker" || t == "mute_speaker")
+    return build_speaker(ctx, spec, err);
+  if (t == "mic" || t == "mute_mic") return build_mic(ctx, spec, err);
   if (t == "volume")       return build_volume(ctx, spec, err);
   *err = std::string("unknown widget kind: ") + t;
   return nullptr;
