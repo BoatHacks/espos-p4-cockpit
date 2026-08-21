@@ -51,6 +51,7 @@
 #include "jlp/net/layout_fetch.h"
 #include "jlp/net/mdns_announce.h"
 #include "jlp/net/sk_put.h"
+#include "jlp/net/wake_discover.h"
 #include "jlp/net/sk_server.h"
 #include "jlp/net/zone_fetch.h"
 #include "jlp/notifications_registry.h"
@@ -71,6 +72,12 @@ bool s_boot_fetch_done = false;
 bool s_last_connected = false;
 cockpit_n2k::TwaiReceiver* s_n2k_rx = nullptr;
 cockpit_n2k::CandumpTcpServer* s_n2k_server = nullptr;
+// Set once the satellite exists, so poll_sk_state() can hand it to wake
+// discovery on the first SignalK connect.
+espos_voice::WyomingSatellite* s_wyoming_sat = nullptr;
+// True when cockpit.wake_host names a wake server explicitly; discovery then
+// stays out of the way.
+bool s_wake_configured = false;
 
 void poll_sk_state() {
   espos_sk_ws_status_t ws;
@@ -92,6 +99,9 @@ void poll_sk_state() {
       }
       jlp::layout_fetch_async_apply(s.host, s.port);
     }
+    // Waits for the SignalK connection because boot has no route yet. An
+    // explicit cockpit.wake_host wins over whatever the server advertises.
+    if (!s_wake_configured) jlp::wake_discover_start(s_wyoming_sat);
   } else if (!connected && s_last_connected) {
     jlp::overlay().set_sk("down");
     jlp::overlay().show_sk_lost();
@@ -268,6 +278,10 @@ extern "C" void app_main(void) {
       wy_cfg.wake_host = wake_host;
       wy_cfg.wake_port = 10400;
       if (wake_word[0]) wy_cfg.wake_words = {wake_word};
+      // An explicit host is a deliberate choice -- a second wake server, or a
+      // specific word. Discovery would overwrite it with the SK server and the
+      // setting would silently do nothing.
+      s_wake_configured = true;
     } else {
       wy_cfg.on_device_wake = true;
     }
@@ -279,6 +293,7 @@ extern "C" void app_main(void) {
   // orchestrator's endpointer would seed its noise floor from the tone.
   wy_cfg.awake_cue = false;
   static espos_voice::WyomingSatellite wyoming_sat(&audio, wy_cfg);
+  s_wyoming_sat = &wyoming_sat;
   wyoming_sat.set_mic_muted_fn([] { return jlp::voice().mic_muted(); });
   jlp::http_api_set_wyoming(&wyoming_sat);
 
