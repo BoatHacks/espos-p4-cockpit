@@ -5,6 +5,7 @@
 #include <netdb.h>
 #include <atomic>
 #include <string>
+#include <vector>
 
 #include "ArduinoJson.h"
 #include "esp_http_client.h"
@@ -142,11 +143,31 @@ void discover_task(void*) {
       continue;
     }
 
-    // Empty word list: which word to listen for is the service's business,
-    // set once on the server rather than duplicated into every panel's config.
-    if (s_sat->set_wake_network(ip, port, {})) {
-      ESP_LOGI(kTag, "wake service READY — network wake to %s:%u", ip.c_str(),
-               port);
+    // Name the word the server is configured for. An empty list is not
+    // "whatever you are set to" -- openWakeWord reads it as "use my default
+    // model" and answers on okay_nabu, so a custom word would never fire and
+    // nothing would report the mismatch.
+    //
+    // Older plugin builds do not report this; an empty list then keeps the
+    // previous behaviour rather than failing the switch.
+    std::vector<std::string> words;
+    if (JsonArrayConst arr = doc["wakeWords"].as<JsonArrayConst>()) {
+      for (JsonVariantConst w : arr) {
+        if (const char* t = w.as<const char*>()) {
+          if (t[0]) words.emplace_back(t);
+        }
+      }
+    }
+    if (words.empty()) {
+      ESP_LOGW(kTag,
+               "server reports no wake words — the service will use its "
+               "default model, not a custom one");
+    }
+
+    if (s_sat->set_wake_network(ip, port, words)) {
+      ESP_LOGI(kTag, "wake service READY — network wake to %s:%u (word: %s)",
+               ip.c_str(), port,
+               words.empty() ? "service default" : words[0].c_str());
     } else {
       ESP_LOGW(kTag, "switch to network wake failed — keeping the on-device word");
     }
