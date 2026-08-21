@@ -321,12 +321,20 @@ extern "C" void app_main(void) {
     cockpit_hal::ui::every(1000, [] { poll_sk_state(); poll_status_line(); });
     cockpit_hal::ui::every(30000, health_check);
     cockpit_hal::ui::every(5000, [] {
-      ESP_LOGI(TAG, "n2k: rx_idle=%llds cl=%u | heap=%lu iram=%u iram_min=%u iram_big=%u psram=%lu",
+      // esp_hosted's SDIO buffers are 64-byte-aligned DMA allocations, and
+      // hosted_malloc_align() tries TWO pools: SPIRAM|DMA first (with
+      // MEMPOOL_PREFER_SPIRAM) then INTERNAL|DMA as fallback. Report both.
+      // Reporting only one is how the C6 link died unseen: iram_big read a
+      // healthy 26 KB while a 9 KB INTERNAL|DMA request was failing.
+      ESP_LOGI(TAG, "n2k: rx_idle=%llds cl=%u | heap=%lu iram=%u iram_min=%u iram_big=%u "
+                    "dma_int=%u dma_ps=%u psram=%lu",
                (long long)((s_n2k_rx && s_n2k_rx->ever_received()) ? s_n2k_rx->seconds_since_last_rx() : -1),
                s_n2k_server ? (unsigned)s_n2k_server->connected_clients() : 0u,
                (unsigned long)esp_get_free_heap_size(), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+               (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT),
+               (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA | MALLOC_CAP_8BIT),
                (unsigned long)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     });
   });
