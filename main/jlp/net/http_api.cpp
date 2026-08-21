@@ -590,6 +590,12 @@ constexpr const char* kWidgetCatalogJson =
       "\"anchor\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"display\",\"fg_color\"]},"
       "\"anchor_track\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"display\",\"fg_color\"]},"
       "\"voice\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bg_color\",\"fg_color\"]},"
+      // The catalogue is what a designer should OFFER, not everything the
+      // device accepts: it feeds the "Add widget" palette directly. Listing
+      // the mute_speaker/mute_mic aliases here would put four buttons on it
+      // for two controls and invite new layouts to use the deprecated name.
+      // Acceptance lives in widget_factory's dispatch; JLP-PROTOCOL documents
+      // the aliases for anyone reading an old layout.
       "\"speaker\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bg_color\",\"fg_color\"]},"
       "\"mic\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bg_color\",\"fg_color\"]},"
       "\"volume\":{\"fields\":[\"x\",\"y\",\"w\",\"h\",\"label\",\"bg_color\",\"fg_color\"]}"

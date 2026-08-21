@@ -62,7 +62,8 @@ class VoiceControl {
   // Mute/unmute the mic: while muted, push-to-talk and wake-word streaming
   // are suppressed — the privacy switch. Panel-local.
   //
-  // "is muted" here, ON = live in the `mic` widget; see set_speaker_muted.
+  // Stored as "is muted" while the `mic` widget reads ON = live, for the
+  // same reason set_speaker_muted above is: unmuted is the power-on default.
   void set_mic_muted(bool muted);
   // Atomic: written on the event_loop (widget callback) but read from the
   // httpd task (the /mic_probe privacy gate + the satellite mute predicate).

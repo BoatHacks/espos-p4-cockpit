@@ -301,14 +301,16 @@ Displayed value = `(raw × scale) + offset`, formatted to `decimals`, then `unit
 - Extra fields: `label` (idle caption, default `TALK`), `bg_color`, `fg_color`.
 
 #### `speaker`
+
 - Panel-local speaker switch. **ON = you hear things, OFF = silent.** Off holds the audio power amp disabled, so **all** panel output — TTS/voice replies and alert chimes — goes quiet. Defaults to ON. No `bind`, no SignalK; a "quiet helm" switch.
 - Extra fields: `label` (default `SPEAKER`), `bg_color`, `fg_color`.
-- Accepts `mute_speaker` as an alias. That was the original kind name, and it said the opposite of what the switch does — the tile has always read ON = working. Existing layouts keep rendering; new ones should use `speaker`.
+- `mute_speaker` is accepted as a legacy alias so existing layouts keep rendering. New layouts should use `speaker`.
 
 #### `mic`
+
 - Panel-local mic switch / privacy control. **ON = mic live, OFF = the mic never streams** (push-to-talk and wake-word both suppressed). Defaults to ON. No `bind`, no SignalK.
 - Extra fields: `label` (default `MIC`), `bg_color`, `fg_color`.
-- Accepts `mute_mic` as an alias, for the same reason as `speaker`.
+- `mute_mic` is accepted as a legacy alias. New layouts should use `mic`.
 
 #### `volume`
 - Draggable speaker-volume slider (0–100), applied at the codec. Panel-local; caption above the bar. No `bind`.
