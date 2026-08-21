@@ -164,12 +164,18 @@ void health_check() {
   static int consecutive_fail = 0;
   bool ok = true;
   const char* reason = "";
-  espos_wifi_status_t w;
-  bool wifi_up = espos_wifi_get_status(&w) == ESP_OK && w.sm.state == ESPOS_WIFI_ST_CONNECTED;
-  if (!wifi_up) {
-    ok = false;
-    reason = "wifi disconnected";
-  } else if (esp_get_free_heap_size() < 64 * 1024) {
+  // Deliberately NOT "wifi disconnected". A router reboot, an AP roam or a
+  // trip out of range are normal and recoverable: espos_wifi reconnects by
+  // itself, and rebooting throws away the UI, every socket and any unsaved
+  // state to fix nothing. Worse, while the network is marginal the panel
+  // reboots every ~90 s, which is what a user hit -- barely able to interact
+  // between restarts.
+  //
+  // A wedged transport still gets caught, by sk_link_stalled() below: it
+  // watches real traffic over the link rather than what the state machine
+  // believes, and only fires when WiFi claims to be up while the stream has
+  // been down for minutes. That is the case a reboot actually fixes.
+  if (esp_get_free_heap_size() < 64 * 1024) {
     ok = false;
     reason = "heap exhausted";
     // Internal RAM is the scarce resource on the P4 (esp_hosted, LVGL and
