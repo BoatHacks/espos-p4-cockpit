@@ -87,10 +87,8 @@ bool resolve_ipv4(const std::string& host, std::string* out) {
 }
 
 void discover_task(void*) {
-  // The plugin reports "starting" while its container comes up, and the panel
-  // boots at about the same time as the server -- so a single query is very
-  // likely to catch it mid-start and conclude, permanently, that there is no
-  // wake service. Retry for a couple of minutes before giving up.
+  // The plugin reports "starting" while its container comes up, and panel and
+  // server boot together, so one query would often miss it for good.
   constexpr int kAttempts = 12;
   constexpr int kDelayMs = 10000;
 
@@ -158,18 +156,14 @@ void discover_task(void*) {
 }  // namespace
 
 void wake_discover_start(espos_voice::WyomingSatellite* sat) {
-  // Called from poll_sk_state() on the UI timer -- one task, so a plain flag
-  // is enough. One shot: whether the server runs a wake service is not
-  // something that changes under us, and re-running would fight the satellite
-  // for its back-end.
+  // One task (the UI timer), so a plain flag is enough. One shot: re-running
+  // would fight the satellite for its back-end.
   static bool done = false;
   if (done || !sat) return;
   s_sat = sat;
   if (xTaskCreate(discover_task, "wake_discover", 5120, nullptr, 3, nullptr) !=
       pdPASS) {
-    // Leave `done` false so the next SK connect retries. Silently never
-    // discovering would leave the panel on the on-device word with nothing
-    // explaining why, which is the failure this whole module exists to end.
+    // `done` stays false so the next SK connect retries.
     ESP_LOGW(kTag, "could not start discovery task — will retry on reconnect");
     return;
   }

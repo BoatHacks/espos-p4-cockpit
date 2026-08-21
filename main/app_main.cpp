@@ -75,6 +75,9 @@ cockpit_n2k::CandumpTcpServer* s_n2k_server = nullptr;
 // Set once the satellite exists, so poll_sk_state() can hand it to wake
 // discovery on the first SignalK connect.
 espos_voice::WyomingSatellite* s_wyoming_sat = nullptr;
+// True when cockpit.wake_host names a wake server explicitly; discovery then
+// stays out of the way.
+bool s_wake_configured = false;
 
 void poll_sk_state() {
   espos_sk_ws_status_t ws;
@@ -96,16 +99,9 @@ void poll_sk_state() {
       }
       jlp::layout_fetch_async_apply(s.host, s.port);
     }
-    // Ask the server whether it runs a wake service. Outside the
-    // s_boot_fetch_done guard on purpose: that fires once ever, and if the
-    // discovery task cannot be created the first time we want the next
-    // connect to try again. wake_discover_start() is itself one-shot once it
-    // has actually started.
-    //
-    // Here rather than in app_main because at boot there is no route yet
-    // (ESP_ERR_HTTP_CONNECT) and the satellite is constructed before WiFi
-    // starts. The panel wakes on the on-device word until this answers.
-    jlp::wake_discover_start(s_wyoming_sat);
+    // Not in app_main: there is no route at boot, and an explicit
+    // cockpit.wake_host must win over whatever the server advertises.
+    if (!s_wake_configured) jlp::wake_discover_start(s_wyoming_sat);
   } else if (!connected && s_last_connected) {
     jlp::overlay().set_sk("down");
     jlp::overlay().show_sk_lost();
@@ -276,6 +272,10 @@ extern "C" void app_main(void) {
       wy_cfg.wake_host = wake_host;
       wy_cfg.wake_port = 10400;
       if (wake_word[0]) wy_cfg.wake_words = {wake_word};
+      // An explicit host is a deliberate choice -- a second wake server, or a
+      // specific word. Discovery would overwrite it with the SK server and the
+      // setting would silently do nothing.
+      s_wake_configured = true;
     } else {
       wy_cfg.on_device_wake = true;
     }
