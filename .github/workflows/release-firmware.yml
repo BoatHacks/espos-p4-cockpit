@@ -40,14 +40,39 @@ jobs:
       # key installs fine over USB and then rejects every future OTA, on the
       # device, long after CI went green.
       - name: restore signing key (releases)
+        id: signing
         if: github.event_name == 'release'
         env:
           KEY: ${{ secrets.COCKPIT_SIGNING_KEY_PEM }}
+          ALLOW_UNSIGNED: ${{ vars.COCKPIT_ALLOW_UNSIGNED_RELEASE }}
         run: |
+          if [ -z "$KEY" ] && [ "$ALLOW_UNSIGNED" = "true" ]; then
+            # Opt-out for forks that want a flashable binary and are not
+            # running an OTA fleet. CMake generates a throwaway key, so the
+            # release installs over USB and no device will ever accept an OTA
+            # signed by a later build. Deliberate, and labelled as such in the
+            # release notes rather than left for someone to discover on a boat.
+            echo "::warning::COCKPIT_ALLOW_UNSIGNED_RELEASE is set: building" \
+                 "with a throwaway signing key. USB flashing works; OTA" \
+                 "updates will NOT."
+            echo "unsigned=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ -z "$KEY" ]; then
-            echo "::error::COCKPIT_SIGNING_KEY_PEM is not set. A release built" \
-                 "without it would be signed with a throwaway key and could" \
-                 "never be updated over OTA. See espos/docs/ota.md."
+            echo "::error::COCKPIT_SIGNING_KEY_PEM is not set." \
+                 "Releases are signed so devices can verify OTA updates;" \
+                 "without a stable key an installed device could never be" \
+                 "updated over the air again."
+            echo "::error::To sign your releases, generate a key and add it" \
+                 "as a repository secret:"
+            echo "::error::  espsecure generate-signing-key --version 2" \
+                 "--scheme rsa3072 signing_key.pem"
+            echo "::error::  gh secret set COCKPIT_SIGNING_KEY_PEM < signing_key.pem"
+            echo "::error::Keep that file safe: losing it means no existing" \
+                 "device can take another OTA."
+            echo "::error::To release without OTA support instead (USB" \
+                 "flashing only), set repository variable" \
+                 "COCKPIT_ALLOW_UNSIGNED_RELEASE=true. See espos/docs/ota.md."
             exit 1
           fi
           printf '%s' "$KEY" > secure_boot_signing_key.pem
@@ -120,6 +145,9 @@ jobs:
           name: merged-firmware
           path: dist/
 
+    outputs:
+      unsigned: ${{ steps.signing.outputs.unsigned }}
+
   release:
     if: github.event_name == 'release'
     needs: build
@@ -131,7 +159,48 @@ jobs:
         with:
           name: merged-firmware
           path: dist
+      # Say it where people download, not only in a CI log they will never
+      # open: an unsigned build flashes over USB and then refuses every OTA.
+      #
+      # Prepended, not appended: action-gh-release only offers append (which
+      # lands below the changelog, where a warning is least likely to be
+      # read), so build the combined body here and overwrite. An empty
+      # `body` is falsy in the action and leaves existing notes untouched,
+      # which is what keeps the signed path unaffected.
+      - name: Prepend the unsigned-build warning
+        if: needs.build.outputs.unsigned == 'true'
+        id: notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          # Fail closed: on a transient API error an empty `existing` would
+          # replace the release notes with nothing but the warning. Losing the
+          # changelog is worse than failing the step, which can be re-run.
+          if ! existing=$(gh release view "$TAG" --json body --jq .body 2>&1); then
+            echo "::error::could not read the existing release body for $TAG:" \
+                 "$existing"
+            exit 1
+          fi
+          # Random delimiter: a release body is arbitrary user text, and a
+          # fixed one appearing inside it would end the heredoc early and let
+          # the rest be parsed as workflow commands.
+          delim="RELEASE_BODY_$(openssl rand -hex 8)"
+          {
+            echo "body<<${delim}"
+            echo '> [!WARNING]'
+            echo '> **Unsigned build — USB flashing only.** Built without a signing'
+            echo '> key (`COCKPIT_ALLOW_UNSIGNED_RELEASE`), so a device flashed with'
+            echo '> it will reject every OTA update, including later releases from'
+            echo '> this repository. Flash over USB, or set'
+            echo '> `COCKPIT_SIGNING_KEY_PEM` and re-release. See espos/docs/ota.md.'
+            echo ''
+            printf '%s\n' "$existing"
+            echo "${delim}"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: softprops/action-gh-release@v2
         with:
           fail_on_unmatched_files: true
           files: dist/*.bin
+          body: ${{ steps.notes.outputs.body }}
