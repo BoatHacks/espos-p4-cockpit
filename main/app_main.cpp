@@ -95,12 +95,17 @@ void poll_sk_state() {
         jlp::zone_fetch_for_paths(s.host, s.port, v);
       }
       jlp::layout_fetch_async_apply(s.host, s.port);
-      // Ask the server whether it runs a wake service. Must be here rather
-      // than in app_main: at boot there is no route yet, and the satellite is
-      // constructed before WiFi starts. The panel wakes on the on-device word
-      // until this answers, then upgrades.
-      jlp::wake_discover_start(s_wyoming_sat);
     }
+    // Ask the server whether it runs a wake service. Outside the
+    // s_boot_fetch_done guard on purpose: that fires once ever, and if the
+    // discovery task cannot be created the first time we want the next
+    // connect to try again. wake_discover_start() is itself one-shot once it
+    // has actually started.
+    //
+    // Here rather than in app_main because at boot there is no route yet
+    // (ESP_ERR_HTTP_CONNECT) and the satellite is constructed before WiFi
+    // starts. The panel wakes on the on-device word until this answers.
+    jlp::wake_discover_start(s_wyoming_sat);
   } else if (!connected && s_last_connected) {
     jlp::overlay().set_sk("down");
     jlp::overlay().show_sk_lost();

@@ -87,77 +87,93 @@ bool resolve_ipv4(const std::string& host, std::string* out) {
 }
 
 void discover_task(void*) {
-  const SkServer srv = sk_server();
-  if (srv.host.empty() || !s_sat) {
+  // The plugin reports "starting" while its container comes up, and the panel
+  // boots at about the same time as the server -- so a single query is very
+  // likely to catch it mid-start and conclude, permanently, that there is no
+  // wake service. Retry for a couple of minutes before giving up.
+  constexpr int kAttempts = 12;
+  constexpr int kDelayMs = 10000;
+
+  for (int attempt = 0; attempt < kAttempts; attempt++) {
+    if (attempt) vTaskDelay(pdMS_TO_TICKS(kDelayMs));
+
+    const SkServer srv = sk_server();
+    if (srv.host.empty() || !s_sat) continue;
+
+    char tok[512] = "";
+    (void)espos_sk_get_token(tok, sizeof(tok));
+
+    const std::string url =
+        "http://" + srv.host + ":" + std::to_string(srv.port) + kPath;
+    std::string body;
+    if (!fetch_status(url, tok, &body)) continue;
+
+    JsonDocument doc;
+    if (deserializeJson(doc, body) != DeserializationError::Ok) {
+      ESP_LOGW(kTag, "status document did not parse");
+      continue;
+    }
+
+    const char* status = doc["status"] | "";
+    if (std::string(status) != "ready") {
+      ESP_LOGI(kTag, "wake service '%s' — retrying", status);
+      continue;
+    }
+
+    // Take only the PORT from the advertised uri. Its host is whatever the
+    // plugin was told to advertise, and with advertiseHost unset that is
+    // 127.0.0.1 -- correct for the server, useless to a panel across the
+    // network. The SK server we already talk to is the right host by
+    // definition: the plugin runs on it.
+    uint16_t port = 10400;
+    const char* uri = doc["uri"] | "";
+    if (const char* colon = strrchr(uri, ':')) {
+      int p = atoi(colon + 1);
+      if (p > 0 && p < 65536) port = static_cast<uint16_t>(p);
+    }
+
+    std::string ip;
+    if (!resolve_ipv4(srv.host, &ip)) {
+      ESP_LOGW(kTag, "could not resolve %s", srv.host.c_str());
+      continue;
+    }
+
+    // Empty word list: which word to listen for is the service's business,
+    // set once on the server rather than duplicated into every panel's config.
+    if (s_sat->set_wake_network(ip, port, {})) {
+      ESP_LOGI(kTag, "wake service READY — network wake to %s:%u", ip.c_str(),
+               port);
+    } else {
+      ESP_LOGW(kTag, "switch to network wake failed — keeping the on-device word");
+    }
     vTaskDelete(nullptr);
     return;
   }
 
-  char tok[512] = "";
-  (void)espos_sk_get_token(tok, sizeof(tok));
-
-  const std::string url =
-      "http://" + srv.host + ":" + std::to_string(srv.port) + kPath;
-  std::string body;
-  if (!fetch_status(url, tok, &body)) {
-    ESP_LOGI(kTag, "no wake service on %s — staying on the on-device word",
-             srv.host.c_str());
-    vTaskDelete(nullptr);
-    return;
-  }
-
-  JsonDocument doc;
-  if (deserializeJson(doc, body) != DeserializationError::Ok) {
-    ESP_LOGW(kTag, "status document did not parse");
-    vTaskDelete(nullptr);
-    return;
-  }
-
-  const char* status = doc["status"] | "";
-  if (std::string(status) != "ready") {
-    ESP_LOGI(kTag, "wake service status '%s' — staying on the on-device word",
-             status);
-    vTaskDelete(nullptr);
-    return;
-  }
-
-  // Take only the PORT from the advertised uri. Its host is whatever the
-  // plugin was told to advertise, and with advertiseHost unset that is
-  // 127.0.0.1 -- correct for the server, useless to a panel across the
-  // network. The SK server we already talk to is the right host by
-  // definition: the plugin runs on it.
-  uint16_t port = 10400;
-  const char* uri = doc["uri"] | "";
-  if (const char* colon = strrchr(uri, ':')) {
-    int p = atoi(colon + 1);
-    if (p > 0 && p < 65536) port = static_cast<uint16_t>(p);
-  }
-
-  std::string ip;
-  if (!resolve_ipv4(srv.host, &ip)) {
-    ESP_LOGW(kTag, "could not resolve %s", srv.host.c_str());
-    vTaskDelete(nullptr);
-    return;
-  }
-
-  // Empty word list: which word to listen for is the service's business, set
-  // once on the server rather than duplicated into every panel's config.
-  if (s_sat->set_wake_network(ip, port, {})) {
-    ESP_LOGI(kTag, "wake service READY — network wake to %s:%u", ip.c_str(), port);
-  } else {
-    ESP_LOGW(kTag, "switch to network wake failed — keeping the on-device word");
-  }
+  ESP_LOGI(kTag, "no wake service after %d attempts — staying on the on-device word",
+           kAttempts);
   vTaskDelete(nullptr);
 }
 
 }  // namespace
 
 void wake_discover_start(espos_voice::WyomingSatellite* sat) {
+  // Called from poll_sk_state() on the UI timer -- one task, so a plain flag
+  // is enough. One shot: whether the server runs a wake service is not
+  // something that changes under us, and re-running would fight the satellite
+  // for its back-end.
   static bool done = false;
-  if (done || !sat) return;  // one shot: the answer does not change at runtime
-  done = true;
+  if (done || !sat) return;
   s_sat = sat;
-  xTaskCreate(discover_task, "wake_discover", 5120, nullptr, 3, nullptr);
+  if (xTaskCreate(discover_task, "wake_discover", 5120, nullptr, 3, nullptr) !=
+      pdPASS) {
+    // Leave `done` false so the next SK connect retries. Silently never
+    // discovering would leave the panel on the on-device word with nothing
+    // explaining why, which is the failure this whole module exists to end.
+    ESP_LOGW(kTag, "could not start discovery task — will retry on reconnect");
+    return;
+  }
+  done = true;
 }
 
 }  // namespace jlp
