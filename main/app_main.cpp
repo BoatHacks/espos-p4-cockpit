@@ -30,7 +30,7 @@
 #include "cockpit_n2k/twai_transmitter.h"
 #include "cockpit_hal/ui.h"
 #include "cockpit_hal/waveshare_7b.h"
-#include "cockpit_voice/wyoming_satellite.h"
+#include "espos_voice/wyoming_satellite.h"
 #include "espos_cfg_keys.h"
 #include "espos_config.h"
 #include "espos_httpd.h"
@@ -248,7 +248,10 @@ extern "C" void app_main(void) {
   // on-device (esp-sr WakeNet "Hi ESP" from the model partition) unless
   // cockpit.wake_host names a signalk-openwakeword server, in which case
   // the mic streams there and any custom-trained word works.
-  cockpit_voice::WyomingSatelliteConfig wy_cfg;
+  espos_voice::WyomingSatelliteConfig wy_cfg;
+  // Set explicitly: espos_voice defaults to a generic "espos", and this is
+  // the name the orchestrator and Home Assistant show for the device.
+  wy_cfg.name = "cockpit";
   {
     char wake_host[64] = "";
     espos_config_get_str(ESPOS_CFG_NS_COCKPIT, ESPOS_CFG_COCKPIT_WAKE_HOST, wake_host, sizeof(wake_host), nullptr);
@@ -269,7 +272,7 @@ extern "C" void app_main(void) {
   // No awake blip: mic and speaker share one I2S bus inches apart, and the
   // orchestrator's endpointer would seed its noise floor from the tone.
   wy_cfg.awake_cue = false;
-  static cockpit_voice::WyomingSatellite wyoming_sat(&audio, wy_cfg);
+  static espos_voice::WyomingSatellite wyoming_sat(&audio, wy_cfg);
   wyoming_sat.set_mic_muted_fn([] { return jlp::voice().mic_muted(); });
   jlp::http_api_set_wyoming(&wyoming_sat);
 

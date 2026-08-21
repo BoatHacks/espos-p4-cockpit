@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
 #pragma once
 
-#include "cockpit_hal/audio_driver.h"
+#include "espos_audio/audio_driver.h"
 
 #include "esp_codec_dev.h"
 #include "driver/i2s_std.h"
@@ -24,7 +24,7 @@ namespace cockpit_hal {
 /// NOTE: pins are verified on the 7B only. The 4B is a different
 /// "86-box" board whose ES8311 wiring is UNVERIFIED; there the codec
 /// still inits but may stay silent until the 4B pins are confirmed.
-class WaveshareAudio : public AudioDriver {
+class WaveshareAudio : public espos_audio::AudioDriver {
  public:
   static constexpr uint32_t kSampleRate = 16000;
 
@@ -44,7 +44,7 @@ class WaveshareAudio : public AudioDriver {
   size_t record_pcm(int16_t* out, size_t max_frames) override;
   void start_capture() override;
   void stop_capture() override;
-  bool probe_mic_channels(MicLevels& out) override;
+  bool probe_mic_channels(espos_audio::AudioDriver::MicLevels& out) override;
 
   // Two live mics (MIC1|MIC2) — expose the 2-channel wake feed. True only once
   // the 2ch handle actually built at init, so the wake engine's "MM" guard is

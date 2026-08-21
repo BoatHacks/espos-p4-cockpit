@@ -716,7 +716,7 @@ namespace {
 // touch the normal mono capture path.
 bool probe_pair(const audio_codec_ctrl_if_t* ctrl,
                 const audio_codec_data_if_t* data_if, uint8_t sel, int idx_a,
-                int idx_b, float gain_db, AudioDriver::MicLevels& out) {
+                int idx_b, float gain_db, espos_audio::AudioDriver::MicLevels& out) {
   es7210_codec_cfg_t cfg = {};
   cfg.ctrl_if = ctrl;
   cfg.mic_selected = sel;
@@ -772,7 +772,7 @@ bool probe_pair(const audio_codec_ctrl_if_t* ctrl,
 }
 }  // namespace
 
-bool WaveshareAudio::probe_mic_channels(MicLevels& out) {
+bool WaveshareAudio::probe_mic_channels(espos_audio::AudioDriver::MicLevels& out) {
   if (!capture_ready_ || !data_if_ || !i2c_bus_) return false;
   // Serialise against playback/capture opens on the shared codec + I2S.
   if (codec_mutex_) xSemaphoreTake(codec_mutex_, portMAX_DELAY);

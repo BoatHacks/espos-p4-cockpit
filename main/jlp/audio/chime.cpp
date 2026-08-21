@@ -15,7 +15,7 @@ namespace jlp {
 // NVS key for the persisted chime mute (keys cap at 15 chars).
 static constexpr const char* kChimeMutedKey = "chime_muted";
 
-void Chime::init(cockpit_hal::AudioDriver* audio) {
+void Chime::init(espos_audio::AudioDriver* audio) {
   audio_ = audio;
   // Restore before any notification can fire, so a muted helm stays quiet
   // through the boot chime as well.

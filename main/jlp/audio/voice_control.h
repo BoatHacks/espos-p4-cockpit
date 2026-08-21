@@ -7,10 +7,10 @@
 #include <atomic>
 #include <cstdint>
 
-namespace cockpit_voice {
+namespace espos_voice {
 class WyomingSatellite;
 }
-namespace cockpit_hal {
+namespace espos_audio {
 class AudioDriver;
 }
 
@@ -21,8 +21,8 @@ class VoiceControl {
   // Wires the satellite + audio driver and restores the persisted
   // speaker/mic mute state, so the panel comes back the way it was left.
   // Call after store_init() — the flags live in the same NVS namespace.
-  void init(cockpit_voice::WyomingSatellite* sat,
-            cockpit_hal::AudioDriver* audio);
+  void init(espos_voice::WyomingSatellite* sat,
+            espos_audio::AudioDriver* audio);
 
   // --- Voice (Wyoming satellite) ---
 
@@ -62,8 +62,8 @@ class VoiceControl {
   bool mic_muted() const { return mic_muted_.load(); }
 
  private:
-  cockpit_voice::WyomingSatellite* sat_ = nullptr;
-  cockpit_hal::AudioDriver* audio_ = nullptr;
+  espos_voice::WyomingSatellite* sat_ = nullptr;
+  espos_audio::AudioDriver* audio_ = nullptr;
   // All three are written on the event_loop (widget callbacks) and read from
   // the httpd task (/hello's audio_state, the /mic_probe privacy gate, the
   // satellite mute predicate), so they are atomic for the same reason
