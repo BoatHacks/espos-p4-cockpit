@@ -3,6 +3,7 @@
 
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <atomic>
 #include <string>
 
 #include "ArduinoJson.h"
@@ -21,10 +22,11 @@ constexpr const char* kTag = "wake_discover";
 constexpr const char* kPath = "/plugins/signalk-openwakeword/api/status";
 
 espos_voice::WyomingSatellite* s_sat = nullptr;
-// Which server we last ran for, and whether a task is in flight. Both are only
-// touched from the UI timer and the single discovery task, one at a time.
+// Which server we last ran for, and whether a task is in flight. s_running is
+// written by the discovery task and read by the UI timer, so it is atomic;
+// s_discovered_for is only touched by the UI timer.
 std::string s_discovered_for;
-bool s_running = false;
+std::atomic<bool> s_running{false};
 
 struct BodySink {
   std::string body;
@@ -148,7 +150,7 @@ void discover_task(void*) {
     } else {
       ESP_LOGW(kTag, "switch to network wake failed — keeping the on-device word");
     }
-    s_running = false;
+    s_running.store(false);
     vTaskDelete(nullptr);
     return;
   }
@@ -157,7 +159,7 @@ void discover_task(void*) {
            kAttempts);
   // Leave s_discovered_for set: this server has been tried and had nothing.
   // A different server is what should trigger another attempt.
-  s_running = false;
+  s_running.store(false);
   vTaskDelete(nullptr);
 }
 
@@ -170,7 +172,7 @@ void wake_discover_start(espos_voice::WyomingSatellite* sat) {
   // manual host is a normal thing to do. Without this the wake host would stay
   // on whichever server answered first. Unchanged server = no work, so this
   // stays effectively one-shot.
-  if (!sat || s_running) return;
+  if (!sat || s_running.load()) return;
 
   const SkServer srv = sk_server();
   if (srv.host.empty()) return;
@@ -178,13 +180,13 @@ void wake_discover_start(espos_voice::WyomingSatellite* sat) {
   if (key == s_discovered_for) return;
   s_discovered_for = key;
   s_sat = sat;
-  s_running = true;
+  s_running.store(true);
   if (xTaskCreate(discover_task, "wake_discover", 5120, nullptr, 3, nullptr) !=
       pdPASS) {
     // `done` stays false so the next SK connect retries.
     ESP_LOGW(kTag, "could not start discovery task — will retry on reconnect");
     s_discovered_for.clear();   // so the next connect tries again
-    s_running = false;
+    s_running.store(false);
   }
 }
 

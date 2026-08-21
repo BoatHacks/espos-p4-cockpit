@@ -8,11 +8,9 @@ class WyomingSatellite;
 namespace jlp {
 
 // Point the satellite at the server's wake service, so the wake word is
-// configured once on the server instead of per panel.
-//
-// Call after the SignalK stream connects: at boot there is no route yet.
-// Safe to call repeatedly -- it re-runs only when the SignalK server changes,
-// so the wake host follows it instead of staying on the old one.
+// configured once on the server instead of per panel. Call after the SignalK
+// stream connects: boot has no route yet. Repeat calls are cheap; it re-runs
+// only when the server changes.
 void wake_discover_start(espos_voice::WyomingSatellite* sat);
 
 }  // namespace jlp

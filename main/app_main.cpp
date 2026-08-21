@@ -99,8 +99,8 @@ void poll_sk_state() {
       }
       jlp::layout_fetch_async_apply(s.host, s.port);
     }
-    // Not in app_main: there is no route at boot, and an explicit
-    // cockpit.wake_host must win over whatever the server advertises.
+    // Waits for the SignalK connection because boot has no route yet. An
+    // explicit cockpit.wake_host wins over whatever the server advertises.
     if (!s_wake_configured) jlp::wake_discover_start(s_wyoming_sat);
   } else if (!connected && s_last_connected) {
     jlp::overlay().set_sk("down");
