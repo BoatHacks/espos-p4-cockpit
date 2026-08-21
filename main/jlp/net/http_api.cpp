@@ -21,7 +21,7 @@
 
 #include "cockpit_hal/ui.h"
 
-#include "cockpit_voice/wyoming_satellite.h"
+#include "espos_voice/wyoming_satellite.h"
 
 #include "../layout/layout_manager.h"
 #include "../layout/store.h"
@@ -33,10 +33,10 @@ static const char* TAG = "jlp.http";
 namespace jlp {
 
 namespace {
-cockpit_voice::WyomingSatellite* g_wyoming = nullptr;
+espos_voice::WyomingSatellite* g_wyoming = nullptr;
 }  // namespace
 
-void http_api_set_wyoming(cockpit_voice::WyomingSatellite* sat) {
+void http_api_set_wyoming(espos_voice::WyomingSatellite* sat) {
   g_wyoming = sat;
 }
 
@@ -268,7 +268,7 @@ esp_err_t mic_probe4_get(httpd_req_t* req) {
     httpd_resp_sendstr(req, "mic muted");
     return ESP_OK;
   }
-  cockpit_hal::AudioDriver::MicLevels lv;
+  espos_audio::AudioDriver::MicLevels lv;
   if (!g_wyoming->probe_mic_levels(lv)) {
     httpd_resp_set_status(req, "503 Service Unavailable");
     httpd_resp_sendstr(req, "no mic probe on this board");

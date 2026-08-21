@@ -2,7 +2,7 @@
 
 #include <atomic>
 
-#include "cockpit_hal/audio_driver.h"
+#include "espos_audio/audio_driver.h"
 
 #include "../notifications_registry.h"
 
@@ -23,7 +23,7 @@ class Chime {
   /// a speaker) — play() then no-ops.
   // Wires the audio driver and restores the persisted mute state. Call
   // after store_init(); the flag shares the layout's NVS namespace.
-  void init(cockpit_hal::AudioDriver* audio);
+  void init(espos_audio::AudioDriver* audio);
 
   /// Play the tone for `state`. Nominal/normal are silent. Suppressed
   /// while muted unless `ignore_mute` (the /beep diagnostic forces one).
@@ -49,7 +49,7 @@ class Chime {
   bool muted() const { return muted_; }
 
  private:
-  cockpit_hal::AudioDriver* audio_ = nullptr;
+  espos_audio::AudioDriver* audio_ = nullptr;
   std::atomic_bool muted_{false};
 };
 

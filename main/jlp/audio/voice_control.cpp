@@ -1,7 +1,7 @@
 #include "voice_control.h"
 
-#include "cockpit_hal/audio_driver.h"
-#include "cockpit_voice/wyoming_satellite.h"
+#include "espos_audio/audio_driver.h"
+#include "espos_voice/wyoming_satellite.h"
 
 #include "esp_log.h"
 
@@ -17,8 +17,8 @@ static constexpr const char* kSpeakerMutedKey = "spk_muted";
 static constexpr const char* kMicMutedKey = "mic_muted";
 static constexpr const char* kVolumeKey = "volume";
 
-void VoiceControl::init(cockpit_voice::WyomingSatellite* sat,
-                        cockpit_hal::AudioDriver* audio) {
+void VoiceControl::init(espos_voice::WyomingSatellite* sat,
+                        espos_audio::AudioDriver* audio) {
   sat_ = sat;
   audio_ = audio;
   // Restore the persisted mute state. Defaults to unmuted on a fresh
@@ -55,13 +55,13 @@ void VoiceControl::set_ptt_held(bool held) {
 int VoiceControl::state_code() const {
   if (!sat_) return 0;
   switch (sat_->state()) {
-    case cockpit_voice::SatState::Idle:
+    case espos_voice::SatState::Idle:
       return 1;
-    case cockpit_voice::SatState::Listening:
+    case espos_voice::SatState::Listening:
       return 2;
-    case cockpit_voice::SatState::Speaking:
+    case espos_voice::SatState::Speaking:
       return 3;
-    case cockpit_voice::SatState::Disconnected:
+    case espos_voice::SatState::Disconnected:
     default:
       return 0;
   }
