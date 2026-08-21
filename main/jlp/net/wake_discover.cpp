@@ -31,15 +31,22 @@ std::atomic<bool> s_running{false};
 
 struct BodySink {
   std::string body;
+  bool truncated = false;
 };
+
+// The document is ~1.7 KB today and grows by ~210 bytes per wake model the
+// service advertises -- and adding custom models is exactly what this feature
+// encourages. Sized well clear of that, and a hit is reported rather than
+// silently producing JSON that fails to parse.
+constexpr size_t kMaxBody = 8192;
 
 esp_err_t on_http_event(esp_http_client_event_t* evt) {
   if (evt->event_id == HTTP_EVENT_ON_DATA && evt->user_data) {
     auto* sink = static_cast<BodySink*>(evt->user_data);
-    // Bounded: the status document is small, and a plugin that answers with
-    // something huge should not be able to grow this without limit.
-    if (sink->body.size() + evt->data_len <= 2048) {
+    if (sink->body.size() + evt->data_len <= kMaxBody) {
       sink->body.append(static_cast<const char*>(evt->data), evt->data_len);
+    } else {
+      sink->truncated = true;
     }
   }
   return ESP_OK;
@@ -65,6 +72,12 @@ bool fetch_status(const std::string& url, const std::string& token,
   esp_http_client_cleanup(c);
   if (err != ESP_OK || status != 200) {
     ESP_LOGI(kTag, "status query: err=%s http=%d", esp_err_to_name(err), status);
+    return false;
+  }
+  if (sink.truncated) {
+    // Parsing a clipped document would fail with a misleading "did not parse".
+    ESP_LOGW(kTag, "status document exceeds %u bytes — ignoring",
+             (unsigned)kMaxBody);
     return false;
   }
   *out = std::move(sink.body);
@@ -150,12 +163,15 @@ void discover_task(void*) {
     //
     // Older plugin builds do not report this; an empty list then keeps the
     // previous behaviour rather than failing the switch.
+    // Bounded: the list comes off the network, and every entry is sent in the
+    // Detect event on each reconnect. A handful is what a real config holds.
+    constexpr size_t kMaxWords = 8;
     std::vector<std::string> words;
     if (JsonArrayConst arr = doc["wakeWords"].as<JsonArrayConst>()) {
       for (JsonVariantConst w : arr) {
-        if (const char* t = w.as<const char*>()) {
-          if (t[0]) words.emplace_back(t);
-        }
+        if (words.size() >= kMaxWords) break;
+        const char* t = w.as<const char*>();
+        if (t && t[0]) words.emplace_back(t);
       }
     }
     if (words.empty()) {
@@ -165,9 +181,16 @@ void discover_task(void*) {
     }
 
     if (s_sat->set_wake_network(ip, port, words)) {
-      ESP_LOGI(kTag, "wake service READY — network wake to %s:%u (word: %s)",
+      // All of them, not just the first: every entry is armed, and a log that
+      // names one would misreport a multi-word config.
+      std::string listed;
+      for (const auto& w : words) {
+        if (!listed.empty()) listed += ", ";
+        listed += w;
+      }
+      ESP_LOGI(kTag, "wake service READY — network wake to %s:%u (words: %s)",
                ip.c_str(), port,
-               words.empty() ? "service default" : words[0].c_str());
+               listed.empty() ? "service default" : listed.c_str());
     } else {
       ESP_LOGW(kTag, "switch to network wake failed — keeping the on-device word");
     }
