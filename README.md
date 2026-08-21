@@ -164,29 +164,25 @@ release image. After that first flash, release OTAs work normally.
 
 ### Forking
 
-Ordinary builds need nothing: CMake generates a development key when
+Ordinary builds need nothing: a development key is generated when
 `secure_boot_signing_key.pem` is absent, so pushes and pull requests on a
-fork build unchanged. Only **publishing a release** needs a decision,
-because that is the artefact other people install:
+fork build unchanged. Only **publishing a release** needs a decision —
+either give CI a signing key so devices can take OTA updates:
 
-- **Running an OTA fleet** — generate a key and add it as a secret. Keep
-  the file: losing it means no already-flashed device can ever take
-  another OTA.
+```sh
+espsecure generate-signing-key --version 2 --scheme rsa3072 signing_key.pem
+gh secret set COCKPIT_SIGNING_KEY_PEM < signing_key.pem
+```
 
-  ```sh
-  espsecure generate-signing-key --version 2 --scheme rsa3072 signing_key.pem
-  gh secret set COCKPIT_SIGNING_KEY_PEM < signing_key.pem
-  ```
+…or set the repository *variable* `COCKPIT_ALLOW_UNSIGNED_RELEASE=true` to
+release a USB-flash-only build, which is labelled as such in its own
+release notes.
 
-- **USB flashing only** — set the repository *variable*
-  `COCKPIT_ALLOW_UNSIGNED_RELEASE=true`. The release builds with a
-  throwaway key and is labelled in its notes as USB-only; devices flashed
-  from it will reject every OTA, including later releases from the same
-  fork.
-
-There is deliberately no committed default key. A private key in a public
-repository is a key everyone has, and any device trusting it would accept
-firmware signed by anyone.
+The reasoning behind both — why losing the key strands every flashed
+device, and why there is deliberately no committed default key — is
+[espOS' OTA documentation](https://github.com/dirkwa/espOS/blob/main/docs/ota.md#releasing-and-forking),
+since signing is inherited from espOS and applies to every project built
+on it.
 
 To build such an image locally, drop the release key in as
 `secure_boot_signing_key.pem` and rebuild. ESP-IDF's signing step depends
