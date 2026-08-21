@@ -21,6 +21,10 @@ constexpr const char* kTag = "wake_discover";
 constexpr const char* kPath = "/plugins/signalk-openwakeword/api/status";
 
 espos_voice::WyomingSatellite* s_sat = nullptr;
+// Which server we last ran for, and whether a task is in flight. Both are only
+// touched from the UI timer and the single discovery task, one at a time.
+std::string s_discovered_for;
+bool s_running = false;
 
 struct BodySink {
   std::string body;
@@ -144,30 +148,44 @@ void discover_task(void*) {
     } else {
       ESP_LOGW(kTag, "switch to network wake failed — keeping the on-device word");
     }
+    s_running = false;
     vTaskDelete(nullptr);
     return;
   }
 
   ESP_LOGI(kTag, "no wake service after %d attempts — staying on the on-device word",
            kAttempts);
+  // Leave s_discovered_for set: this server has been tried and had nothing.
+  // A different server is what should trigger another attempt.
+  s_running = false;
   vTaskDelete(nullptr);
 }
 
 }  // namespace
 
 void wake_discover_start(espos_voice::WyomingSatellite* sat) {
-  // One task (the UI timer), so a plain flag is enough. One shot: re-running
-  // would fight the satellite for its back-end.
-  static bool done = false;
-  if (done || !sat) return;
+  // One task (the UI timer), so plain statics are enough.
+  //
+  // Re-runs when the SignalK server changes: mDNS can re-select, and pinning a
+  // manual host is a normal thing to do. Without this the wake host would stay
+  // on whichever server answered first. Unchanged server = no work, so this
+  // stays effectively one-shot.
+  if (!sat || s_running) return;
+
+  const SkServer srv = sk_server();
+  if (srv.host.empty()) return;
+  const std::string key = srv.host + ":" + std::to_string(srv.port);
+  if (key == s_discovered_for) return;
+  s_discovered_for = key;
   s_sat = sat;
+  s_running = true;
   if (xTaskCreate(discover_task, "wake_discover", 5120, nullptr, 3, nullptr) !=
       pdPASS) {
     // `done` stays false so the next SK connect retries.
     ESP_LOGW(kTag, "could not start discovery task — will retry on reconnect");
-    return;
+    s_discovered_for.clear();   // so the next connect tries again
+    s_running = false;
   }
-  done = true;
 }
 
 }  // namespace jlp
