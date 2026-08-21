@@ -161,9 +161,39 @@ jobs:
           path: dist
       # Say it where people download, not only in a CI log they will never
       # open: an unsigned build flashes over USB and then refuses every OTA.
+      #
+      # Prepended, not appended: action-gh-release only offers append (which
+      # lands below the changelog, where a warning is least likely to be
+      # read), so build the combined body here and overwrite. An empty
+      # `body` is falsy in the action and leaves existing notes untouched,
+      # which is what keeps the signed path unaffected.
+      - name: Prepend the unsigned-build warning
+        if: needs.build.outputs.unsigned == 'true'
+        id: notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          existing=$(gh release view "$TAG" --json body --jq .body 2>/dev/null || echo "")
+          # Random delimiter: a release body is arbitrary user text, and a
+          # fixed one appearing inside it would end the heredoc early and let
+          # the rest be parsed as workflow commands.
+          delim="RELEASE_BODY_$(openssl rand -hex 8)"
+          {
+            echo "body<<${delim}"
+            echo '> [!WARNING]'
+            echo '> **Unsigned build — USB flashing only.** Built without a signing'
+            echo '> key (`COCKPIT_ALLOW_UNSIGNED_RELEASE`), so a device flashed with'
+            echo '> it will reject every OTA update, including later releases from'
+            echo '> this repository. Flash over USB, or set'
+            echo '> `COCKPIT_SIGNING_KEY_PEM` and re-release. See espos/docs/ota.md.'
+            echo ''
+            echo "$existing"
+            echo "${delim}"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: softprops/action-gh-release@v2
         with:
           fail_on_unmatched_files: true
           files: dist/*.bin
-          append_body: ${{ needs.build.outputs.unsigned == 'true' }}
-          body: ${{ needs.build.outputs.unsigned == 'true' && '> **Unsigned build — USB flashing only.** This release was built without a signing key (`COCKPIT_ALLOW_UNSIGNED_RELEASE`), so devices flashed with it will reject every OTA update, including later releases from this repository. Flash over USB, or set `COCKPIT_SIGNING_KEY_PEM` and re-release. See espos/docs/ota.md.' || '' }}
+          body: ${{ steps.notes.outputs.body }}
