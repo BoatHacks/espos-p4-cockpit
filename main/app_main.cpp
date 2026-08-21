@@ -51,6 +51,7 @@
 #include "jlp/net/layout_fetch.h"
 #include "jlp/net/mdns_announce.h"
 #include "jlp/net/sk_put.h"
+#include "jlp/net/wake_discover.h"
 #include "jlp/net/sk_server.h"
 #include "jlp/net/zone_fetch.h"
 #include "jlp/notifications_registry.h"
@@ -71,6 +72,9 @@ bool s_boot_fetch_done = false;
 bool s_last_connected = false;
 cockpit_n2k::TwaiReceiver* s_n2k_rx = nullptr;
 cockpit_n2k::CandumpTcpServer* s_n2k_server = nullptr;
+// Set once the satellite exists, so poll_sk_state() can hand it to wake
+// discovery on the first SignalK connect.
+espos_voice::WyomingSatellite* s_wyoming_sat = nullptr;
 
 void poll_sk_state() {
   espos_sk_ws_status_t ws;
@@ -91,6 +95,11 @@ void poll_sk_state() {
         jlp::zone_fetch_for_paths(s.host, s.port, v);
       }
       jlp::layout_fetch_async_apply(s.host, s.port);
+      // Ask the server whether it runs a wake service. Must be here rather
+      // than in app_main: at boot there is no route yet, and the satellite is
+      // constructed before WiFi starts. The panel wakes on the on-device word
+      // until this answers, then upgrades.
+      jlp::wake_discover_start(s_wyoming_sat);
     }
   } else if (!connected && s_last_connected) {
     jlp::overlay().set_sk("down");
@@ -273,6 +282,7 @@ extern "C" void app_main(void) {
   // orchestrator's endpointer would seed its noise floor from the tone.
   wy_cfg.awake_cue = false;
   static espos_voice::WyomingSatellite wyoming_sat(&audio, wy_cfg);
+  s_wyoming_sat = &wyoming_sat;
   wyoming_sat.set_mic_muted_fn([] { return jlp::voice().mic_muted(); });
   jlp::http_api_set_wyoming(&wyoming_sat);
 
