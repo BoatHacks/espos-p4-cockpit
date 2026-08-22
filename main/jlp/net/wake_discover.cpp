@@ -109,11 +109,21 @@ bool resolve_ipv4(const std::string& host, std::string* out) {
 void discover_task(void*) {
   // The plugin reports "starting" while its container comes up, and panel and
   // server boot together, so one query would often miss it for good.
-  constexpr int kAttempts = 12;
-  constexpr int kDelayMs = 10000;
+  //
+  // Discovery used to stop after 12 attempts (2 minutes) and never look again,
+  // which left a panel that outlived a slow plugin start deaf until someone
+  // rebooted it -- there is no re-trigger endpoint. Keep retrying instead,
+  // backing off to a slow poll so a server that will never run the plugin
+  // costs one request a minute rather than one every ten seconds.
+  constexpr int kFastAttempts = 12;
+  constexpr int kFastDelayMs = 10000;
+  constexpr int kSlowDelayMs = 60000;
 
-  for (int attempt = 0; attempt < kAttempts; attempt++) {
-    if (attempt) vTaskDelay(pdMS_TO_TICKS(kDelayMs));
+  for (int attempt = 0;; attempt++) {
+    if (attempt) {
+      vTaskDelay(pdMS_TO_TICKS(attempt < kFastAttempts ? kFastDelayMs
+                                                       : kSlowDelayMs));
+    }
 
     const SkServer srv = sk_server();
     if (srv.host.empty() || !s_sat) continue;
@@ -199,10 +209,8 @@ void discover_task(void*) {
     return;
   }
 
-  ESP_LOGI(kTag, "no wake service after %d attempts — staying on the on-device word",
-           kAttempts);
-  // Leave s_discovered_for set: this server has been tried and had nothing.
-  // A different server is what should trigger another attempt.
+  // Unreachable: the loop above retries forever. Kept so the task still has a
+  // single, obvious exit if a break is ever added.
   s_running.store(false);
   vTaskDelete(nullptr);
 }
