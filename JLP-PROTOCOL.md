@@ -300,13 +300,17 @@ Displayed value = `(raw × scale) + offset`, formatted to `decimals`, then `unit
 - Requires an orchestrator to have armed the satellite (`run-satellite`); when the satellite is output-only (`pause-satellite`) a press is a no-op.
 - Extra fields: `label` (idle caption, default `TALK`), `bg_color`, `fg_color`.
 
-#### `mute_speaker`
-- Panel-local speaker switch. **ON = speaker works, OFF = muted** — the tile is captioned `SPEAKER`, so the switch follows the caption rather than the widget name. Muted holds the audio power amp disabled, so **all** panel output — TTS/voice replies and alert chimes — goes silent. No `bind`, no SignalK; a "quiet helm" switch.
-- Extra fields: `label` (default `SPEAKER`), `bg_color`, `fg_color`.
+#### `speaker`
 
-#### `mute_mic`
-- Panel-local mic switch / privacy control. **ON = mic live, OFF = muted**, matching the `MIC` caption. While muted, push-to-talk and wake-word streaming are suppressed — the mic never streams. No `bind`, no SignalK.
+- Panel-local speaker switch. **ON = you hear things, OFF = silent.** Off holds the audio power amp disabled, so **all** panel output — TTS/voice replies and alert chimes — goes quiet. Defaults to ON. No `bind`, no SignalK; a "quiet helm" switch.
+- Extra fields: `label` (default `SPEAKER`), `bg_color`, `fg_color`.
+- `mute_speaker` is accepted as a legacy alias so existing layouts keep rendering. New layouts should use `speaker`.
+
+#### `mic`
+
+- Panel-local mic switch / privacy control. **ON = mic live, OFF = the mic never streams** (push-to-talk and wake-word both suppressed). Defaults to ON. No `bind`, no SignalK.
 - Extra fields: `label` (default `MIC`), `bg_color`, `fg_color`.
+- `mute_mic` is accepted as a legacy alias. New layouts should use `mic`.
 
 #### `volume`
 - Draggable speaker-volume slider (0–100), applied at the codec. Panel-local; caption above the bar. No `bind`.

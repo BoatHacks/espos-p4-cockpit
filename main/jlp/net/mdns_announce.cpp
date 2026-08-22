@@ -19,9 +19,12 @@ void mdns_announce_start(uint16_t api_port) {
           // Keep widgets + firmware in lockstep with /hello in
           // http_api.cpp. mDNS browsers use these for capability
           // discovery before falling back to a real /hello fetch.
+          // Canonical kinds only, for the same reason /hello lists them:
+          // this is what a client should offer, not every spelling the
+          // device will accept.
           {"schema",   "1"},
           {"widgets",  "label,value,toggle,arc,bar,bargroup,button,notifications,"
-                       "anchor,anchor_track,voice,mute_speaker,mute_mic,volume"},
+                       "anchor,anchor_track,voice,speaker,mic,volume"},
           {"firmware", "p4-cockpit-jlp-2.0.0"},
           {"api",      "/layout,/hello,/healthz,/screenshot"},
       };
