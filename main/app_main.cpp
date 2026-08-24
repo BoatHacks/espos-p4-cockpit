@@ -58,6 +58,7 @@
 #include "jlp/status_overlay.h"
 #include "jlp/subject_registry.h"
 #include "jlp/sun_state.h"
+#include "jlp/mic_overlay.h"
 #include "jlp/wake_overlay.h"
 #include "jlp/zone_registry.h"
 
@@ -288,7 +289,11 @@ extern "C" void app_main(void) {
   }
   wy_cfg.wake_input_gain = 6;   // mic quiet (~665 raw); x6 into WakeNet range
   wy_cfg.wake_threshold = 0.45f;
-  wy_cfg.mic_stream_gain = 3;   // lift the STT stream past the endpointer floor
+  // The STT stream is normalised toward a target RMS (see wyoming_satellite.h):
+  // the orchestrator's speech floor is hardcoded at 700 for a far louder mic,
+  // and this panel measures ~19 RMS raw, so no fixed multiplier works across
+  // rooms and speakers. mic_stream_gain is only the fallback when
+  // mic_stream_target_rms is 0.
   // No awake blip: mic and speaker share one I2S bus inches apart, and the
   // orchestrator's endpointer would seed its noise floor from the tone.
   wy_cfg.awake_cue = false;
@@ -337,6 +342,7 @@ extern "C" void app_main(void) {
     jlp::notifications().hook_sk_ws();
     jlp::sun_state().hook_sk_ws();
     jlp::alert_overlay().init();
+    jlp::mic_overlay().init();    // after alert_overlay: an alarm wins
     jlp::wake_overlay().init();   // after alert_overlay: z-order
     jlp::idle_dimmer().init();
     (void)jlp::notifications().on_change([]() {

@@ -66,6 +66,7 @@ constexpr size_t kMaxClipFrames =
 struct Clip {
   int16_t* samples;
   size_t frames;
+  bool cue;  // must not be dropped (wake feedback), see play_cue()
 };
 constexpr int kQueueDepth = 4;
 }  // namespace
@@ -311,10 +312,23 @@ void WaveshareAudio::init() {
   ESP_LOGI(TAG, "ES8311 audio ready (%lu Hz mono)", (unsigned long)kSampleRate);
 }
 
+void WaveshareAudio::play_cue(const int16_t* samples, size_t frames) {
+  // The wake cue is the user's only signal that the panel heard them, and it
+  // fires exactly as the pipeline takes the mic -- the moment the disposable
+  // policy below is most likely to drop it. Enqueue it as a cue so the audio
+  // task waits for the codec instead of giving up after 50 ms.
+  enqueue(samples, frames, /*cue=*/true);
+}
+
 void WaveshareAudio::play_pcm(const int16_t* samples, size_t frames) {
+  enqueue(samples, frames, /*cue=*/false);
+}
+
+void WaveshareAudio::enqueue(const int16_t* samples, size_t frames, bool cue) {
   if (!ready_ || !enabled_ || !samples || frames == 0) return;
   // A chime during an active voice stream is disposable — drop it rather
   // than fight the stream for the codec (and gap the speech with a tail).
+  // A cue is not disposable, but it still must not talk over TTS.
   if (streaming_) return;
   // Cap the clip length. Alerts are well under a second; this both
   // rejects absurd inputs and keeps every downstream byte-size
@@ -322,17 +336,35 @@ void WaveshareAudio::play_pcm(const int16_t* samples, size_t frames) {
   // size_t overflow.
   if (frames > kMaxClipFrames) return;
 
-  // Copy into a heap buffer the audio task will own and free. Dropping
-  // on a full queue is intentional: a chime is disposable, and the
-  // caller (often the LVGL event_loop task) must never block on audio.
+  // Copy into a heap buffer the audio task will own and free.
   Clip clip;
   clip.frames = frames;
+  clip.cue = cue;
   clip.samples = (int16_t*)malloc(frames * sizeof(int16_t));
   if (!clip.samples) return;
   memcpy(clip.samples, samples, frames * sizeof(int16_t));
 
   if (xQueueSend(queue_, &clip, 0) != pdPASS) {
-    free(clip.samples);
+    // Queue full. A chime is disposable, so drop it -- the caller is often the
+    // LVGL event_loop task and must never block on audio.
+    if (!cue) {
+      free(clip.samples);
+      return;
+    }
+    // A cue is not disposable: a burst of chimes must not be what silences the
+    // one sound the user needs. Evict the oldest queued clip to make room. If
+    // that clip is itself a cue, keep it and drop ours instead -- the earlier
+    // cue is the one the user is already waiting on.
+    Clip old;
+    if (xQueueReceive(queue_, &old, 0) == pdPASS) {
+      if (old.cue) {
+        xQueueSend(queue_, &old, 0);
+        free(clip.samples);
+        return;
+      }
+      free(old.samples);
+    }
+    if (xQueueSend(queue_, &clip, 0) != pdPASS) free(clip.samples);
   }
 }
 
@@ -377,8 +409,12 @@ void WaveshareAudio::run() {
       }
       memset(stereo + n * 2, 0, tail * 2 * sizeof(int16_t));
       // Share the codec with the streaming path. If a voice stream grabbed
-      // the codec meanwhile, skip this chime (it's disposable).
-      if (xSemaphoreTake(codec_mutex_, pdMS_TO_TICKS(50)) == pdTRUE) {
+      // the codec meanwhile, skip this chime (it's disposable). A cue waits
+      // longer: it fires as the pipeline takes the mic, so the codec is busy
+      // exactly then, and 50 ms silently loses the one sound the user needs.
+      const TickType_t wait =
+          clip.cue ? pdMS_TO_TICKS(400) : pdMS_TO_TICKS(50);
+      if (xSemaphoreTake(codec_mutex_, wait) == pdTRUE) {
         if (!streaming_) {
           ensure_rate(kSampleRate);
           esp_codec_dev_write(codec_, stereo, total * 2 * sizeof(int16_t));

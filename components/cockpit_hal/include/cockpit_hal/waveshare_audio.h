@@ -32,6 +32,7 @@ class WaveshareAudio : public espos_audio::AudioDriver {
   bool ready() const override { return ready_; }
   uint32_t sample_rate() const override { return kSampleRate; }
   void play_pcm(const int16_t* samples, size_t frames) override;
+  void play_cue(const int16_t* samples, size_t frames) override;
   void set_volume(uint8_t pct) override;
   void set_enabled(bool on) override;
 
@@ -134,6 +135,10 @@ class WaveshareAudio : public espos_audio::AudioDriver {
   TaskHandle_t task_ = nullptr;
   volatile bool enabled_ = true;
   bool ready_ = false;
+
+  // Shared body of play_pcm()/play_cue(); `cue` marks a clip the audio task
+  // must not drop when the codec is briefly busy.
+  void enqueue(const int16_t* samples, size_t frames, bool cue);
 
   // Serialises codec open/close/write between the chime audio_task and a
   // streaming caller (the Wyoming socket task). A stream and a chime never

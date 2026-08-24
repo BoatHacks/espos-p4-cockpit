@@ -28,14 +28,28 @@ uint32_t color_for_not_state(NotState s) {
 
 }  // namespace
 
+namespace {
+// Message area: starts below the state + path headings and stops short of the
+// ACK button, so a long message can never overlap it. LV_VER_RES resolves at
+// runtime, so the height is computed in init() rather than as a constant.
+constexpr int kMsgTop = 64;
+constexpr int kAckH = 80;
+constexpr int kPad = 32;
+constexpr int kMsgGap = 12;
+}  // namespace
+
 void AlertOverlay::init() {
   // The modal lives on the active screen at z-order = top. Created
   // hidden; rebuild() will show it when there's a qualifying
   // notification to display.
   lv_obj_t* scr = lv_screen_active();
   root_ = lv_obj_create(scr);
-  lv_obj_set_size(root_, LV_HOR_RES, LV_VER_RES);
-  lv_obj_align(root_, LV_ALIGN_TOP_LEFT, 0, 0);
+  // Lower half only. A full-screen modal hid the whole layout for one line of
+  // text and a button -- on a helm the instruments underneath are exactly what
+  // you want to keep reading while acknowledging an alarm. It still covers the
+  // ACK button's own area, so a stray tap can't reach a widget beneath it.
+  lv_obj_set_size(root_, LV_HOR_RES, LV_VER_RES / 2);
+  lv_obj_align(root_, LV_ALIGN_BOTTOM_LEFT, 0, 0);
   lv_obj_set_style_bg_color(root_, lv_color_hex(0x0d1117), LV_PART_MAIN);
   lv_obj_set_style_bg_opa(root_, LV_OPA_90, LV_PART_MAIN);
   lv_obj_set_style_border_width(root_, 0, LV_PART_MAIN);
@@ -71,7 +85,13 @@ void AlertOverlay::init() {
   lv_label_set_text(msg_label_, "");
   lv_label_set_long_mode(msg_label_, LV_LABEL_LONG_WRAP);
   lv_obj_set_width(msg_label_, LV_HOR_RES - 80);
-  lv_obj_align(msg_label_, LV_ALIGN_CENTER, 0, -20);
+  // Bound the height and align to the top of the message area rather than
+  // letting the label grow from the centre: on the half-height overlay a
+  // four-line message grew far enough down to sit under the ACK button. The
+  // region ends where the button begins, and anything longer scrolls.
+  lv_obj_set_height(msg_label_,
+                    LV_VER_RES / 2 - 2 * kPad - kAckH - kMsgTop - kMsgGap);
+  lv_obj_align(msg_label_, LV_ALIGN_TOP_MID, 0, kMsgTop);
   lv_obj_set_style_text_align(msg_label_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
 
   ack_button_ = lv_button_create(root_);
