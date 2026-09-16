@@ -139,15 +139,17 @@ int32_t scale_to_steps(float display_value, float min, float max) {
 //   - both                         -> small-font caption on top, body
 //                                     below (typical HMI tile layout)
 //
-// Body text is the SK meta `description` when one is published, else
-// the formatted numeric value. This makes a label bound to e.g.
-// `electrical.switches.bank.213.1.state` show "BMS DnC" instead of
-// "1.0", which matches what operators read on the physical relay.
-// The tile background is zone-tinted from the current value, same as
-// toggle / arc / bar.
+// Body text is the formatted numeric value by default. Set
+// `prefer_description: true` to show the SK meta `description`
+// instead (when one is published) — e.g. a label bound to
+// `electrical.switches.bank.213.1.state` with prefer_description
+// shows "BMS DnC" instead of "1.0", matching the physical relay's
+// silkscreen. The tile background is zone-tinted from the current
+// value, same as toggle / arc / bar.
 lv_obj_t* build_label(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   const char* path = spec["bind"] | (const char*)nullptr;
   const char* caption = spec["label"] | (const char*)nullptr;
+  const bool prefer_description = spec["prefer_description"] | false;
   const Colors colors = parse_colors(spec);
 
   // No bind: single static text label, return that directly.
@@ -188,15 +190,19 @@ lv_obj_t* build_label(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
   lv_obj_set_style_text_color(val, lv_color_hex(colors.fg), LV_PART_MAIN);
   lv_obj_set_style_text_font(
       val, font_from_spec(spec, &lv_font_montserrat_28), LV_PART_MAIN);
-  // If a description is already in the registry (loaded via REST
-  // fetch on layout apply), show it immediately so the widget is
-  // legible before — or even without — the first value delta. Slow-
-  // updating SK paths (switch states, SOC) might not see a delta
-  // for a long time; without this the label sits at "—" until the
-  // value changes, which can be never.
-  {
+  // With prefer_description, show the description immediately (if
+  // already in the registry from the REST fetch on layout apply) so
+  // the widget is legible before — or even without — the first value
+  // delta. Slow-updating SK paths (switch states, SOC) might not see
+  // a delta for a long time; without this the label sits at "—"
+  // until the value changes, which can be never. Without
+  // prefer_description there's no formatted value yet at build time,
+  // so it starts at "—" and the observer fills it in on first delta.
+  if (prefer_description) {
     const std::string& desc = zones().description(std::string(path));
     lv_label_set_text(val, desc.empty() ? "—" : desc.c_str());
+  } else {
+    lv_label_set_text(val, "—");
   }
   if (caption && *caption) {
     lv_obj_align(val, LV_ALIGN_TOP_LEFT, 0, 20);
@@ -211,8 +217,9 @@ lv_obj_t* build_label(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
     Disp d;
     lv_obj_t* tile;
     Colors colors;
+    bool prefer_description;
   };
-  auto* lctx = new LabelCtx{parse_display(spec), root, colors};
+  auto* lctx = new LabelCtx{parse_display(spec), root, colors, prefer_description};
   lv_obj_set_user_data(val, lctx);
   lv_obj_add_event_cb(
       val,
@@ -229,11 +236,15 @@ lv_obj_t* build_label(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
         auto* lc = static_cast<LabelCtx*>(lv_obj_get_user_data(w));
         float raw = lv_subject_get_float(s);
         float v = raw * lc->d.scale + lc->d.offset;
-        // Prefer the SK meta description over the formatted value.
-        const std::string& desc = zones().description(lc->d.path);
-        if (!desc.empty()) {
-          lv_label_set_text(w, desc.c_str());
-        } else {
+        bool showed_desc = false;
+        if (lc->prefer_description) {
+          const std::string& desc = zones().description(lc->d.path);
+          if (!desc.empty()) {
+            lv_label_set_text(w, desc.c_str());
+            showed_desc = true;
+          }
+        }
+        if (!showed_desc) {
           lv_label_set_text_fmt(w, "%.*f %s", lc->d.decimals, v, lc->d.unit);
         }
         // Zones are in raw SK units (e.g. ratio 0..1 for SOC); match
