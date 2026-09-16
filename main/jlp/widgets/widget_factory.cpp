@@ -32,9 +32,12 @@ namespace jlp {
 
 namespace {
 
-uint32_t kFgHex = 0xe6edf3;
+constexpr uint32_t kFgHexDefault = 0xe6edf3;
+constexpr uint32_t kAccentHexDefault = 0x58a6ff;
+
+uint32_t kFgHex = kFgHexDefault;
 uint32_t kMutedHex = 0x8b949e;
-uint32_t kAccentHex = 0x58a6ff;
+uint32_t kAccentHex = kAccentHexDefault;
 constexpr uint32_t kTileBgHex = 0x161b22;
 
 constexpr int32_t kBarSteps = 1000;  // LVGL bar/arc integer range
@@ -47,32 +50,6 @@ struct Colors {
   uint32_t bg;
   uint32_t fg;
 };
-
-// Parse "#rrggbb" or "#rgb" into a 24-bit hex color. Returns true on
-// success; on failure (missing field, malformed) leaves *out untouched.
-bool parse_hex_color(const char* s, uint32_t* out) {
-  if (!s || *s != '#') return false;
-  const char* h = s + 1;
-  size_t n = strlen(h);
-  if (n != 3 && n != 6) return false;
-  uint32_t v = 0;
-  for (size_t i = 0; i < n; i++) {
-    char c = h[i];
-    uint32_t d;
-    if      (c >= '0' && c <= '9') d = c - '0';
-    else if (c >= 'a' && c <= 'f') d = 10 + c - 'a';
-    else if (c >= 'A' && c <= 'F') d = 10 + c - 'A';
-    else return false;
-    v = (v << 4) | d;
-  }
-  if (n == 3) {
-    // expand 0xRGB to 0xRRGGBB
-    uint32_t r = (v >> 8) & 0xF, g = (v >> 4) & 0xF, b = v & 0xF;
-    v = (r << 20) | (r << 16) | (g << 12) | (g << 8) | (b << 4) | b;
-  }
-  *out = v;
-  return true;
-}
 
 Colors parse_colors(JsonObjectConst spec) {
   Colors c{kTileBgHex, kFgHex};
@@ -423,6 +400,43 @@ int label_width_for(JsonObjectConst spec) {
   return avail > 16 ? avail : 16;
 }
 }  // namespace
+
+bool parse_hex_color(const char* s, uint32_t* out) {
+  if (!s || *s != '#') return false;
+  const char* h = s + 1;
+  size_t n = strlen(h);
+  if (n != 3 && n != 6) return false;
+  uint32_t v = 0;
+  for (size_t i = 0; i < n; i++) {
+    char c = h[i];
+    uint32_t d;
+    if      (c >= '0' && c <= '9') d = c - '0';
+    else if (c >= 'a' && c <= 'f') d = 10 + c - 'a';
+    else if (c >= 'A' && c <= 'F') d = 10 + c - 'A';
+    else return false;
+    v = (v << 4) | d;
+  }
+  if (n == 3) {
+    // expand 0xRGB to 0xRRGGBB
+    uint32_t r = (v >> 8) & 0xF, g = (v >> 4) & 0xF, b = v & 0xF;
+    v = (r << 20) | (r << 16) | (g << 12) | (g << 8) | (b << 4) | b;
+  }
+  *out = v;
+  return true;
+}
+
+void apply_theme(JsonObjectConst theme) {
+  // Reset to firmware defaults first so a layout that omits `theme`
+  // (or a field of it) doesn't inherit the previous layout's colors.
+  kFgHex = kFgHexDefault;
+  kAccentHex = kAccentHexDefault;
+  if (theme.isNull()) return;
+  uint32_t v;
+  if (parse_hex_color(theme["fg"] | (const char*)nullptr, &v)) kFgHex = v;
+  if (parse_hex_color(theme["accent"] | (const char*)nullptr, &v)) {
+    kAccentHex = v;
+  }
+}
 
 // Panel-local audio-mute toggle (bind "@audio_mute"). Same look as a
 // normal toggle, but ON = muted (chime suppressed on this panel, current
@@ -1536,7 +1550,13 @@ void button_fire(const std::string& path, const std::string& json,
 }
 
 lv_obj_t* build_button(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
-  const Colors colors = parse_colors(spec);
+  Colors colors = parse_colors(spec);
+  // A button has no SK zone feedback loop, so unlike a value/bar/arc
+  // tile, an uncolored button has no zone fallback to lean on. Read it
+  // as an active, tappable tile by default rather than a flat
+  // background tile — same accent used as the bar/arc indicator
+  // fallback (see parse_colors' kTileBgHex default above).
+  if (colors.bg == kTileBgHex) colors.bg = kAccentHex;
   const char* path = spec["bind"] | (const char*)nullptr;
   if (!path) { *err = "button: bind required"; return nullptr; }
   const char* caption = spec["label"] | "button";
