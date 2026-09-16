@@ -10,8 +10,13 @@
 
 #include <stdint.h>
 
-/* --- Color --- */
-#define LV_COLOR_DEPTH 16  /* RGB565 for MIPI-DSI panels */
+/* --- Color ---
+ * LV_COLOR_DEPTH is deprecated as of LVGL 9.4; LV_COLOR_FORMAT_DEFAULT
+ * is what current lvgl (registry dep floats "^9.3.0", so CI picks up
+ * new 9.x releases) actually reads. Leaving LV_COLOR_DEPTH set with no
+ * LV_COLOR_FORMAT_DEFAULT trips lv_conf_internal.h's #warning under
+ * -Werror and fails the build. */
+#define LV_COLOR_FORMAT_DEFAULT LV_COLOR_FORMAT_RGB565  /* RGB565 for MIPI-DSI panels */
 
 /* --- Memory ---
  * LVGL 9 renamed the v8 LV_MEM_CUSTOM switch to LV_USE_STDLIB_MALLOC.
