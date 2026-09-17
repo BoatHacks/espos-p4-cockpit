@@ -1,0 +1,203 @@
+# Dependabot for ESP-IDF components, because Dependabot does not do this.
+#
+# The component manager is not a Dependabot ecosystem (see .github/dependabot.yml),
+# so nothing watches idf_component.yml or dependencies.lock. With the lock
+# committed, "has anything moved?" becomes answerable: re-resolve within the
+# ranges the manifests allow and diff the result. A changed lock means a new
+# version (or a republished component at the same version -- the lock carries
+# content hashes, so that is caught too).
+#
+# This only reports. It never updates the lock on its own: a component bump
+# changes the binary that goes on a boat, so it goes through a PR and a build
+# like any other change.
+name: Dependency drift
+
+# One run at a time: a scheduled and a manual run overlapping could both see
+# no existing issue and each create one.
+concurrency:
+  group: dependency-drift
+  cancel-in-progress: false
+
+on:
+  schedule:
+    # Mondays 06:00 UTC, matching the weekly Dependabot cadence.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: read pinned IDF version
+        id: idf
+        run: echo "version=$(cat .idf-version)" >> "$GITHUB_OUTPUT"
+
+      - name: re-resolve dependencies
+        uses: espressif/esp-idf-ci-action@9d38657f3d789ca759b2b37aaf5ceffbc42c4f0d # v1
+        with:
+          esp_idf_version: ${{ steps.idf.outputs.version }}
+          target: esp32p4
+          # update-dependencies rewrites the lock to the newest versions the
+          # manifests permit. reconfigure alone would honour the existing lock
+          # and report nothing, which is the whole point of having one.
+          command: idf.py update-dependencies
+
+      - name: diff the lock
+        id: diff
+        run: |
+          if git diff --quiet -- dependencies.lock; then
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+            echo "No component drift."
+            exit 0
+          fi
+          echo "drift=true" >> "$GITHUB_OUTPUT"
+          git --no-pager diff -- dependencies.lock
+          # Compare the two locks by dependency KEY rather than grepping the
+          # diff: a component republished at the same version moves only its
+          # component_hash, and `git diff -U0` shows those lines without the
+          # key they belong to -- a report that cannot name the component is
+          # no use in the one case it exists for.
+          git show HEAD:dependencies.lock > /tmp/lock.old
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, re
+
+          # Parsed without PyYAML on purpose: the runner does not provision it
+          # for system python, and an undeclared import that only fails on the
+          # drift path would break the report exactly when it is needed. The
+          # shape here is fixed by the component manager -- a component key at
+          # two spaces, its fields at four. Nested `version:` lines belong to
+          # dependency REQUIREMENTS and sit deeper, so anchoring on the key and
+          # taking only 4-space fields keeps them out.
+          # The key is any name at two spaces -- including bare "idf", which
+          # has no namespace and whose version is worth reporting too. Matching
+          # only "ns/name" left cur pointing at the PREVIOUS component while
+          # idf's own fields overwrote it.
+          KEY = re.compile(r"^  ([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?):\s*$")
+          FIELD = re.compile(r"^    (version|component_hash):\s*(.+?)\s*$")
+          # Anything else at two spaces or less ends the current entry, so a
+          # stray line can never attach a field to the wrong component.
+          OUTDENT = re.compile(r"^ {0,2}\S")
+
+          def deps(path):
+              out, cur = {}, None
+              started = False
+              for line in open(path):
+                  line = line.rstrip("\n")
+                  if line.startswith("dependencies:"):
+                      started = True
+                      continue
+                  if not started:
+                      continue
+                  if line and not line.startswith(" "):
+                      break          # left the dependencies block
+                  m = KEY.match(line)
+                  if m:
+                      cur = m.group(1)
+                      out.setdefault(cur, {})
+                      continue
+                  m = FIELD.match(line)
+                  if m and cur:
+                      out[cur][m.group(1)] = m.group(2).strip("'\"")
+                      continue
+                  if line.strip() and OUTDENT.match(line):
+                      cur = None
+              return out
+
+          old, new = deps("/tmp/lock.old"), deps("dependencies.lock")
+          ver, rep, add, gone = [], [], [], []
+          for k in sorted(set(old) | set(new)):
+              o, n = old.get(k), new.get(k)
+              if o is None:
+                  add.append(f"+ {k} {n.get('version','?')}")
+              elif n is None:
+                  gone.append(f"- {k} {o.get('version','?')}")
+              elif o.get("version") != n.get("version"):
+                  ver.append(f"~ {k} {o.get('version','?')} -> {n.get('version','?')}")
+              elif o.get("component_hash") != n.get("component_hash"):
+                  rep.append(f"! {k} {n.get('version','?')} republished "
+                             f"({str(o.get('component_hash'))[:12]} -> "
+                             f"{str(n.get('component_hash'))[:12]})")
+
+          lines = ver + add + gone + rep
+          kind = "version" if (ver or add or gone) else "hash" if rep else "other"
+          if not lines:
+              # Nothing in the dependency entries moved (manifest_hash alone,
+              # say). Carry the raw diff rather than an empty report.
+              kind = "other"
+              raw = os.popen("git diff -U0 -- dependencies.lock").read().splitlines()
+              lines = raw[:40] or ["(no textual diff available)"]
+          print(f"kind={kind}")
+          print("changed<<EOF")
+          print("\n".join(lines))
+          print("EOF")
+          PY
+
+      - name: open or update an issue
+        if: steps.diff.outputs.drift == 'true'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          # Through the environment, never interpolated into the script: this
+          # is registry-derived text, and a backtick or ${...} in it would
+          # otherwise be evaluated as JavaScript in a step holding
+          # issues: write.
+          DRIFT_SUMMARY: ${{ steps.diff.outputs.changed }}
+          DRIFT_KIND: ${{ steps.diff.outputs.kind }}
+        with:
+          script: |
+            const title = 'Component versions have drifted from dependencies.lock'
+            const kind = process.env.DRIFT_KIND
+            const lede = kind === 'hash'
+              ? 'A component was **republished at the same version**: only its '
+                + 'content hash moved. Worth a look before taking it.'
+              : kind === 'other'
+              ? 'The lock changed in a way that is neither a version nor a hash '
+                + 'move; the raw diff is below.'
+              : 'Re-resolving within the ranges in the manifests produced a '
+                + 'different `dependencies.lock`, so newer components are available.'
+            const body = [
+              lede,
+              '',
+              'Changed entries:',
+              '',
+              '```diff',
+              process.env.DRIFT_SUMMARY ?? '',
+              '```',
+              '',
+              'To take them: `idf.py update-dependencies`, commit the lock, and let',
+              'the PR build prove it. Flash the result before merging if the change',
+              'touches anything on the display or audio path -- a component bump can',
+              'alter behaviour without breaking the build.',
+              '',
+              '_Raised by `.github/workflows/dependency-drift.yml`; re-runs weekly._'
+            ].join('\n')
+
+            // Paginate: the default page is 30, and a drift issue sitting
+            // past it would be invisible here and a duplicate filed instead.
+            const existing = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
+                owner: context.repo.owner, repo: context.repo.repo,
+                state: 'open', labels: 'dependencies', per_page: 100
+              }
+            )
+            const hit = existing.find(i => i.title === title)
+            if (hit) {
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: hit.number, body
+              })
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: ['dependencies']
+              })
+            }
