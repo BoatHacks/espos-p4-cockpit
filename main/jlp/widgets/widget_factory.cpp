@@ -49,12 +49,14 @@ constexpr int32_t kBarSteps = 1000;  // LVGL bar/arc integer range
 struct Colors {
   uint32_t bg;
   uint32_t fg;
+  bool fg_explicit;
 };
 
 Colors parse_colors(JsonObjectConst spec) {
-  Colors c{kTileBgHex, kFgHex};
+  Colors c{kTileBgHex, kFgHex, false};
   parse_hex_color(spec["bg_color"] | (const char*)nullptr, &c.bg);
-  parse_hex_color(spec["fg_color"] | (const char*)nullptr, &c.fg);
+  c.fg_explicit =
+      parse_hex_color(spec["fg_color"] | (const char*)nullptr, &c.fg);
   return c;
 }
 
@@ -400,6 +402,7 @@ int label_width_for(JsonObjectConst spec) {
   return avail > 16 ? avail : 16;
 }
 }  // namespace
+}  // namespace (anonymous, outer)
 
 bool parse_hex_color(const char* s, uint32_t* out) {
   if (!s || *s != '#') return false;
@@ -437,6 +440,8 @@ void apply_theme(JsonObjectConst theme) {
     kAccentHex = v;
   }
 }
+
+namespace {
 
 // Panel-local audio-mute toggle (bind "@audio_mute"). Same look as a
 // normal toggle, but ON = muted (chime suppressed on this panel, current
@@ -718,8 +723,8 @@ lv_obj_t* build_slider(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
         float v = raw * sc->display.scale + sc->display.offset;
         lv_slider_set_value(w, scale_to_steps(v, sc->min, sc->max),
                             LV_ANIM_OFF);
-        uint32_t fallback = sc->colors.fg != kFgHex ? sc->colors.fg
-                                                     : kAccentHex;
+        uint32_t fallback = sc->colors.fg_explicit ? sc->colors.fg
+                                                    : kAccentHex;
         uint32_t c = zone_color(sc->display.path, raw, fallback);
         lv_obj_set_style_bg_color(w, lv_color_hex(c), LV_PART_INDICATOR);
       },
@@ -1061,7 +1066,8 @@ lv_obj_t* build_arc(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
         // Zones live in raw SK units; match against raw, not display.
         // Fall back to fg_color (which doubles as the indicator color)
         // when no zone matches, else default accent.
-        uint32_t fallback = rb->colors.fg != kFgHex ? rb->colors.fg : kAccentHex;
+        uint32_t fallback =
+            rb->colors.fg_explicit ? rb->colors.fg : kAccentHex;
         uint32_t c = zone_color(rb->display.path, raw, fallback);
         lv_obj_set_style_arc_color(w, lv_color_hex(c), LV_PART_INDICATOR);
       },
@@ -1184,7 +1190,8 @@ lv_obj_t* build_bar(BuildCtx& ctx, JsonObjectConst spec, std::string* err) {
         // Zones live in raw SK units; match against raw, not display.
         // Fall back to fg_color override (indicator color) when no
         // zone matches, else default accent.
-        uint32_t fallback = rb->colors.fg != kFgHex ? rb->colors.fg : kAccentHex;
+        uint32_t fallback =
+            rb->colors.fg_explicit ? rb->colors.fg : kAccentHex;
         uint32_t c = zone_color(rb->display.path, raw, fallback);
         lv_obj_set_style_bg_color(w, lv_color_hex(c), LV_PART_INDICATOR);
       },
@@ -1452,8 +1459,8 @@ lv_obj_t* build_bargroup(BuildCtx& ctx, JsonObjectConst spec,
           } else {
             lv_bar_set_value(w, v_steps, LV_ANIM_OFF);
           }
-          uint32_t fallback = rb.colors.fg != kFgHex ? rb.colors.fg
-                                                    : kAccentHex;
+          uint32_t fallback = rb.colors.fg_explicit ? rb.colors.fg
+                                                     : kAccentHex;
           uint32_t c = zone_color(rb.display.path, raw, fallback);
           lv_obj_set_style_bg_color(w, lv_color_hex(c), LV_PART_INDICATOR);
           // Live value text. We deliberately omit the unit here — the

@@ -353,7 +353,7 @@ ApplyResult LayoutManager::apply(const std::string& json, ApplySource src) {
   // atomically with the rest of the layout and never bleeds into the
   // next one.
   JsonObjectConst theme = doc["theme"];
-  uint32_t theme_bg;
+  uint32_t theme_bg = 0;
   if (!theme.isNull() &&
       parse_hex_color(theme["bg"] | (const char*)nullptr, &theme_bg)) {
     lv_obj_set_style_bg_color(staging, lv_color_hex(theme_bg), LV_PART_MAIN);
