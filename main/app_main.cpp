@@ -10,6 +10,7 @@
  * Player (jlp/) with its layout push API on :8081, the NMEA 2000 gateway
  * and the status/alert overlays.
  */
+#include <cstring>
 #include <cstdio>
 #include <set>
 #include <string>
@@ -22,7 +23,7 @@
 #include "freertos/task.h"
 
 #include "cockpit_hal/ui.h"
-#include "cockpit_hal/waveshare_7b.h"
+#include "cockpit_hal/board.h"
 #include "cockpit_hal/waveshare_audio.h"
 #include "espos.h"
 #include "espos_cfg_keys.h"
@@ -167,14 +168,34 @@ void poll_status_line() {
 // hear before the radio comes up. Runs on the main task after log + config.
 esp_err_t panel_up(void*) {
   // ---- display + LVGL first: the panel shows something within a second
-  static cockpit_hal::Waveshare7BDisplay display;
-  static cockpit_hal::Waveshare7BTouch touch;
+  static cockpit_hal::BoardDisplay display;
+  static cockpit_hal::BoardTouch touch;
   cockpit_hal::ui::start(&display, &touch);
   {
     int32_t pct = 95;
     espos_config_get_i32(ESPOS_CFG_NS_COCKPIT, ESPOS_CFG_COCKPIT_BRIGHTNESS, &pct);
     display.set_brightness((uint8_t)pct);
+    // The dimmer restores this value on every wake, so it has to know it;
+    // otherwise its own default would undo the setting on the next touch.
+    jlp::idle_dimmer().set_on_brightness((uint8_t)pct);
   }
+
+  // Apply cockpit.brightness the moment it is written, rather than only at
+  // the next boot: the setting is what a user reaches for when the panel is
+  // too dim to read, and needing a reboot to see it makes it feel broken.
+  espos_config_subscribe(
+      [](const char* ns, const char* key, void*) {
+        if (strcmp(ns, ESPOS_CFG_NS_COCKPIT) != 0) return;
+        if (strcmp(key, ESPOS_CFG_COCKPIT_BRIGHTNESS) != 0) return;
+        int32_t pct = 95;
+        espos_config_get_i32(ESPOS_CFG_NS_COCKPIT, ESPOS_CFG_COCKPIT_BRIGHTNESS, &pct);
+        // Runs on the writer's task (the httpd handler), while the dimmer's
+        // own 1 Hz poll runs on the ui task -- so hop over there rather than
+        // touching its state from two tasks at once.
+        const auto brightness = (uint8_t)pct;
+        cockpit_hal::ui::post([brightness] { jlp::idle_dimmer().set_on_brightness(brightness); });
+      },
+      nullptr);
 
   // Panel speaker + mics (ES8311 + NS4150B, ES7210). Same hardware on 7B
   // and 4B. Drives the alert chime and the voice satellite. Must come

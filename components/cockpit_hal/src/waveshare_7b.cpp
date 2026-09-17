@@ -1,4 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-Source-Available-No-Redistribution */
+#include "sdkconfig.h"
+#if CONFIG_COCKPIT_BOARD_WAVESHARE_7B
+
 #include "cockpit_hal/waveshare_7b.h"
 #include "cockpit_hal/i2c_bus.h"
 
@@ -96,11 +99,19 @@ void Waveshare7BDisplay::init() {
 void* Waveshare7BDisplay::get_draw_buffer(int index) { return framebuffers_[index % kNumBuffers]; }
 
 void Waveshare7BDisplay::flush(int x, int y, int w, int h, const void* buf) {
+  // Discard a completion left over from a transfer that overran its wait,
+  // before starting this one: otherwise the next wait_flush_done() returns
+  // immediately on the PREVIOUS transfer's token and LVGL reuses the draw
+  // buffer while the DSI is still reading it.
+  xSemaphoreTake(trans_done_, 0);
   esp_lcd_panel_draw_bitmap(panel_, x, y, x + w, y + h, buf);
 }
 
 void Waveshare7BDisplay::wait_flush_done() {
-  if (trans_done_) xSemaphoreTake(trans_done_, pdMS_TO_TICKS(100));
+  if (!trans_done_) return;
+  if (xSemaphoreTake(trans_done_, pdMS_TO_TICKS(100)) == pdTRUE) return;
+  // See flush(): the late completion is cleared there, not consumed here.
+  ESP_LOGW(TAG, "flush did not complete within 100 ms");
 }
 
 void Waveshare7BDisplay::init_ldo() {
@@ -217,3 +228,5 @@ TouchDriver::TouchPoint Waveshare7BTouch::read() {
 }
 
 }  // namespace cockpit_hal
+
+#endif  // CONFIG_COCKPIT_BOARD_WAVESHARE_7B
